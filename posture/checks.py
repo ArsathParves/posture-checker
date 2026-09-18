@@ -620,6 +620,25 @@ def _dnssec(rep: Report, d: str):
 
     if st["algorithms"]:
         rep.add(S, "Algorithms", "INFO", ", ".join(sorted(set(st["algorithms"]))))
+        # FN4: RFC 8624 §3.1 marks SHA-1-based DNSSEC signing algorithms as
+        # NOT RECOMMENDED (5, 7) or MUST NOT (1, 3, 6). A signed zone using
+        # them is worse than a strong FAIL because it silently erodes the
+        # security signal — validators are actively downgrading. Hardening-
+        # only so an operator who *did* deploy DNSSEC isn't punished worse
+        # than one who never signed at all; the signal is "rotate the key".
+        _DEPRECATED_ALGS = {
+            "RSAMD5", "DSA", "RSASHA1", "DSANSEC3SHA1", "RSASHA1NSEC3SHA1",
+        }
+        observed = {a.split(" ", 1)[0] for a in st["algorithms"]}
+        deprecated = sorted(observed & _DEPRECATED_ALGS)
+        if deprecated:
+            rep.add(S, "Algorithm strength", "WARN",
+                    f"Deprecated algorithm(s) in use: {', '.join(deprecated)}",
+                    "RFC 8624 §3.1 marks SHA-1-based DNSSEC signing algorithms "
+                    "as NOT RECOMMENDED (algs 5, 7) or MUST NOT (algs 1, 3, 6). "
+                    "Rotate the key material to alg 13 (ECDSAP256SHA256) or "
+                    "alg 15 (ED25519) at your DNS provider.",
+                    hardening=True)
     for n in st["notes"]:
         rep.add(S, "Note", "INFO", n)
     if state in ("broken", "incomplete"):
