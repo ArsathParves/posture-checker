@@ -112,6 +112,14 @@ def normalize_domain(raw: str) -> tuple[str, str, list[str]]:
     if not re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+", puny):
         raise ValueError(f"'{raw}' is not a syntactically valid domain")
 
+    # RFC 1035 §2.3.4: total name length must be 253 octets or less
+    # (excluding the trailing dot). Checked before per-label so operators
+    # see the more informative diagnostic on grossly oversized input.
+    if len(puny) > 253:
+        raise ValueError(
+            f"Domain total length {len(puny)} exceeds 253 octets (RFC 1035 §2.3.4)"
+        )
+
     # RFC 1035: labels must be 63 octets or less
     labels = puny.split(".")
     for lbl in labels:

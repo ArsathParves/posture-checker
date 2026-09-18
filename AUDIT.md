@@ -137,7 +137,7 @@ The single most damaging correctness item is C4 (hardcoded anycast brand list in
 
 ## Edge Cases
 
-- **E1** — Domains at the exact 63-octet label / 253-octet name boundary — normalize_domain tests cover length but not the boundary values.
+- **E1** — ✅ **DONE** — Domains at the exact 63-octet label / 253-octet name boundary. v0.5 checked per-label length (63) but had NO total-length check, so a domain of 4×63-char labels (255 chars including 3 dots) would slip past `normalize_domain` and surface as an obscure `idna` / dnspython downstream error instead of a clean API-boundary rejection. Fix: added an RFC 1035 §2.3.4 total-length guard in `posture/core.py::normalize_domain` (after IDN encode, before the per-label loop) — raises `ValueError` naming the octet count and the section number when `len(puny) > 253`. Placed before per-label so grossly-oversized input surfaces the more informative diagnostic. Tests: `tests/test_normalize_domain.py::TestBoundaryLengths` — 3 cases: 253 accepted (3×63 + 1×61 + 3 dots), 254 rejected with 253/total-length message, and a belt-and-braces 63-char label at a non-leading position. Full offline suite: 233 passed, 0 regressions.
 - **E2** — Bidirectional IDN (Arabic/Hebrew labels): punycode round-trip is not tested for RTL strings.
 - **E3** — Empty non-terminal in DNSSEC NSEC/NSEC3 responses — not exercised.
 - **E4** — Wildcards in DKIM (`example.com` has `*._domainkey.example.com` per CLAUDE.md ground truth) — the selector probe stops at exact match and does not consult the wildcard; behaviour needs a test.

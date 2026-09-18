@@ -86,3 +86,38 @@ class TestObviousGarbage:
     def test_empty_rejected(self):
         with pytest.raises(ValueError):
             normalize_domain("")
+
+
+class TestBoundaryLengths:
+    """E1 — RFC 1035 §2.3.4 total-length limit (253 octets excluding
+    the trailing dot) must be enforced at the API boundary, and the
+    exact boundary values must behave correctly. The v0.5 normaliser
+    checked per-label length but had NO total-length check — a domain
+    of 4×63-char labels (255 chars including 3 dots) would slip through
+    and hit `idna` / dnspython downstream where the errors are less
+    helpful."""
+
+    def test_total_length_exactly_253_accepted(self):
+        """The maximum-legal FQDN: labels chosen so the total is 253.
+        Use 3×63-char labels (189) + a 60-char label + 3 dots = 252,
+        add one char = 253. Must be accepted."""
+        parts = ["a" * 63, "a" * 63, "a" * 63, "a" * 61]
+        name = ".".join(parts)  # 63+63+63+61 + 3 dots = 253
+        assert len(name) == 253
+        _, puny, _ = normalize_domain(name)
+        assert puny == name
+
+    def test_total_length_over_253_rejected(self):
+        """One char over the limit must fail with a clear message
+        naming the 253-octet cap, not an obscure downstream error."""
+        parts = ["a" * 63, "a" * 63, "a" * 63, "a" * 62]
+        name = ".".join(parts)  # 63+63+63+62 + 3 dots = 254
+        assert len(name) == 254
+        with pytest.raises(ValueError, match=r"253|total length|too long"):
+            normalize_domain(name)
+
+    def test_label_exactly_63_octets_at_the_start_accepted(self):
+        """Belt-and-braces on N6: the 63-char boundary works at every
+        position, not just the leading label."""
+        _, puny, _ = normalize_domain(f"example.{'a' * 63}.com")
+        assert f"{'a' * 63}" in puny
