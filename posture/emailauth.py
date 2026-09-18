@@ -49,9 +49,15 @@ def _txt_records(domain: str) -> list[str]:
 def _count_spf_lookups(record: str, domain: str, depth=0, seen=None) -> tuple[int, list]:
     """Recursively count DNS-querying mechanisms. Returns (count, trace).
 
-    RFC 7208 compliance:
-    - redirect= is ignored if 'all' mechanism is present (§6.1)
-    - mx mechanism costs 1 lookup + 1 per MX host for A/AAAA (§4.6.4)
+    RFC 7208 compliance (§4.6.4):
+    - The "10 DNS-lookup limit" counts each DNS-term mechanism
+      (include, a, mx, ptr, exists) and the redirect modifier as exactly 1.
+      Exceeding 10 total forces permerror.
+    - The A/AAAA lookups triggered by an mx or ptr mechanism have their
+      own secondary cap (>10 targets → permerror) but do NOT add to the
+      primary 10-term budget. So ``mx = 1`` here, matching mxtoolbox,
+      dmarcian, opendmarc, and every other RFC-compliant validator.
+    - §6.1: redirect= is ignored if a terminal 'all' mechanism is present.
     """
     if seen is None:
         seen = set()
@@ -88,17 +94,10 @@ def _count_spf_lookups(record: str, domain: str, depth=0, seen=None) -> tuple[in
                         c, tr = _count_spf_lookups(sub["record"], target, depth + 1, seen)
                         count += c
                         trace.extend(f"  {x}" for x in tr)
-        elif t == "mx":
-            # RFC 7208 §4.6.4: mx costs 1 lookup + 1 per MX host's A/AAAA
-            # For now, we count 1 for the MX lookup; getting the actual count requires
-            # querying the domain's MX records, which we do in get_spf context
-            count += 1
-            trace.append(term)
-            # Add estimated cost for MX hosts (typically 2-5 hosts, estimate conservatively)
-            # This is imperfect but better than counting flat 1
-            # We would need to query domain's MX records for exact count
-        elif t.startswith("mx:"):
-            # Similar to mx but for a specific domain
+        elif t == "mx" or t.startswith("mx:"):
+            # RFC 7208 §4.6.4: mx counts as one DNS-term toward the 10-limit.
+            # Nested A/AAAA lookups on MX targets have their own separate cap
+            # (>10 targets → permerror) and do NOT add to the primary budget.
             count += 1
             trace.append(term)
         else:

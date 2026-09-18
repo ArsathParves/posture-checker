@@ -93,6 +93,32 @@ def test_qualifiers_do_not_confuse_parser():
     assert count == 2
 
 
+def test_bare_mx_counts_as_one_per_rfc_7208_4_6_4():
+    """Explicit RFC pin (relates to the withdrawn C5 audit finding).
+
+    RFC 7208 §4.6.4 counts each DNS-term mechanism as exactly 1 toward
+    the 10-lookup limit. The A/AAAA lookups triggered on MX targets have
+    their own separate cap and do not add to the primary term budget.
+
+    A future 'improvement' that changes mx to ``1 + len(mx_targets)``
+    would diverge from RFC §4.6.4 and every mainstream SPF validator
+    (mxtoolbox, dmarcian, opendmarc). This test guards against that."""
+    rec = "v=spf1 mx -all"
+    with patch("posture.emailauth.get_spf", side_effect=_no_recursion):
+        count, trace = _count_spf_lookups(rec, "example.com")
+    assert count == 1
+    assert trace == ["mx"]
+
+
+def test_mx_with_target_counts_as_one_per_rfc_7208_4_6_4():
+    """Same rule for ``mx:target.example``: exactly one DNS-term."""
+    rec = "v=spf1 mx:mail.example.net -all"
+    with patch("posture.emailauth.get_spf", side_effect=_no_recursion):
+        count, trace = _count_spf_lookups(rec, "example.com")
+    assert count == 1
+    assert trace == ["mx:mail.example.net"]
+
+
 def test_loop_protection_prevents_infinite_recursion():
     """seen-set guards against include cycles."""
     def loopy(target):

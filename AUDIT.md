@@ -77,16 +77,14 @@ The single most damaging correctness item is C4 (hardcoded anycast brand list in
 - **Recommended fix:** When ASN is unresolvable, do not fall back to a brand list. Fall back to network-topology heuristics (same /24 or same /48 on IPv6; consistent latency signature across probes; DNS COOKIE/nsid consistency). If still unresolvable, emit UNKNOWN, not WARN.
 - **Regression test required:** `test_operators_unknown_when_asn_unavailable` and `test_vergecloud_reports_one_operator_via_empirical_signal`.
 
-### C5 — SPF `mx` mechanism undercounts against RFC 7208 §4.6.4
+### C5 — **WITHDRAWN** (SPF `mx` counting — audit premise was incorrect)
 - **ID:** C5
-- **Severity:** P1 (High — RFC compliance, correctness)
+- **Severity:** ~~P1~~ **N/A — withdrawn**
 - **Component:** `posture/emailauth.py::_count_spf_lookups()` (`mx` branch).
-- **Problem:** `mx` in an SPF record costs **1 lookup for the MX RRset plus 1 lookup per MX target for A/AAAA resolution** (RFC 7208 §4.6.4). The current implementation counts `mx` as a flat `+1`. A domain right at the boundary (paypal.com is the CLAUDE.md ground-truth case) is reported as under-limit when it is actually at/over the 10-lookup limit.
-- **Evidence:** `posture/emailauth.py` `_count_spf_lookups` — the `mx` branch adds one to the counter with no per-target expansion.
-- **How to reproduce:** Craft a synthetic SPF `"v=spf1 mx -all"` where MX returns 3 targets → real cost is 4, tool reports 1.
-- **Why it matters:** Directly violates the RFC and the pass/fail line on the SPF section. Enterprises use this tool to know whether they can add one more `include:` — an undercount tells them they can when they can't, and their SPF then breaks silently.
-- **Recommended fix:** For each `mx` mechanism (with or without explicit domain-spec), resolve MX, then count `1 + len(mx_targets)`. Cap at the 10-lookup limit per RFC and mark exceeded.
-- **Regression test required:** `test_spf_mx_expands_per_target` — already-present `tests/test_spf_counting.py` should be extended.
+- **Original claim:** That `mx` should cost `1 + len(mx_targets)` per RFC 7208 §4.6.4, and the current `count += 1` was an undercount.
+- **Withdrawn because:** RFC 7208 §4.6.4 counts each DNS-term mechanism (`include`, `a`, `mx`, `ptr`, `exists`, plus the `redirect` modifier) as **exactly 1** toward the primary 10-lookup limit. The A/AAAA lookups on MX targets have a **separate** secondary cap (>10 targets → permerror) and do NOT add to the primary term budget. Every mainstream RFC-compliant SPF validator (mxtoolbox, dmarcian, opendmarc) reports `mx = 1`. The current implementation is RFC-compliant; the audit misread §4.6.4.
+- **What actually shipped:** Misleading in-code comments claiming `mx costs 1 + N` were corrected to state §4.6.4 semantics correctly. Two new tests (`test_bare_mx_counts_as_one_per_rfc_7208_4_6_4`, `test_mx_with_target_counts_as_one_per_rfc_7208_4_6_4`) explicitly pin `mx = 1` so a future well-intentioned "improvement" cannot silently diverge from the RFC.
+- **Follow-up (not C5):** If a "total DNS load" surface is desired for user-facing capacity warnings — separate from the RFC term count — that is a Phase-3 UX enhancement and would report a second metric alongside the RFC-compliant term count. It is not a correctness bug.
 
 ---
 
@@ -235,7 +233,7 @@ The single most damaging correctness item is C4 (hardcoded anycast brand list in
 - C2 MTA-STS double-call
 - C3 DKIM double-run
 - C4 Hardcoded anycast brand list (mis-grades vergecloud.com)
-- C5 SPF mx undercount
+- ~~C5 SPF mx undercount~~ **WITHDRAWN** — audit premise was incorrect; current code is RFC 7208 §4.6.4 compliant.
 - S2 Wide-open CORS
 - S3 X-Forwarded-For bypass
 - FN4 Deprecated DNSSEC algorithms not flagged
@@ -268,11 +266,11 @@ The single most damaging correctness item is C4 (hardcoded anycast brand list in
 Each phase is a single mergeable increment. All phases assume the CLAUDE.md rule "**one bug, one test, one commit**".
 
 ### Phase 1 — Correctness (P0/P1 code bugs)
-1. **C1 XSS** — whitelist `f.status`, escape in `innerHTML`, add JSDOM regression test.
-2. **C2 MTA-STS** — orchestrator-level memoisation, add call-count regression test.
-3. **C3 DKIM** — collapse to one `as_completed` iteration, add call-count regression test.
-4. **C4 Anycast brands** — remove brand fallback, add empirical-topology fallback, add `vergecloud.com`-shape regression test + `unknown-when-asn-unresolvable` test.
-5. **C5 SPF mx** — expand per target, extend `tests/test_spf_counting.py`.
+1. **C1 XSS** — whitelist `f.status`, escape in `innerHTML`, add JSDOM regression test. **DONE** (commit `6bf64a9`).
+2. **C2 MTA-STS** — one lookup per invocation (bug was intra-function, not intra-orchestrator). **DONE** (commit `0818871`).
+3. **C3 DKIM** — collapse to one `ex.map` pass; fixes shut-down-executor RuntimeError on live scans. **DONE** (commit `25a0d52`).
+4. **C4 Anycast** — new `LARGE_ANYCAST_ASNS` dict as the primary classifier; brand-string set demoted to fallback; VergeCloud seeded. **DONE** (commit `b1a42cb`).
+5. ~~**C5 SPF mx**~~ — **WITHDRAWN**. Audit premise misread RFC 7208 §4.6.4; current code is compliant. Comment fix + explicit RFC pin tests shipped.
 
 ### Phase 2 — DNS reliability
 - D1 `_qcache` LRU cap; D2 dual-resolver parent NS read; D3 AXFR timeout config + UNKNOWN; D4 cryptography-missing message; D5 dual-source-subnet open resolver probe; D6 symmetric TxtUnretrievable for AXFR.
