@@ -143,9 +143,13 @@ def probe_each_ns(domain: str, ns_map: dict) -> dict:
     """Query SOA directly at each NS. Detects lame delegation + serial drift."""
     results: dict[str, dict] = {}
     for host, ips in ns_map.items():
-        ip = (ips.get("ipv4") or [None])[0]
+        # E6: fall back to IPv6 when there is no A record. `dns.query.udp`
+        # accepts an IPv6 literal directly, so an AAAA-only NS is fully
+        # probeable — reporting it as "no_A_record" would collapse a
+        # reachable-but-v6-only NS into a FAIL (rule 1 violation).
+        ip = (ips.get("ipv4") or [None])[0] or (ips.get("ipv6") or [None])[0]
         if not ip:
-            results[host] = {"reachable": False, "error": "no_A_record",
+            results[host] = {"reachable": False, "error": "no_address",
                              "authoritative": None, "serial": None, "rtt_ms": None}
             continue
         try:
