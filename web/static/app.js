@@ -81,12 +81,15 @@ function prepareSections() {
     const el = document.createElement("div");
     el.className = "section pending";
     el.dataset.section = name;
+    // A4 — <h2> for the section title so screen-reader users can
+    // navigate by heading; findings inside <ul> so they can be
+    // stepped through as list items.
     el.innerHTML = `
       <div class="section-head">
-        <span>${escapeHtml(name)}</span>
+        <h2>${escapeHtml(name)}</h2>
         <span class="grade-pill">running…</span>
       </div>
-      <div class="section-body"></div>`;
+      <ul class="section-body"></ul>`;
     sectionsEl.appendChild(el);
   }
 }
@@ -157,11 +160,11 @@ function renderSection(name, findings, elapsedMs) {
   body.innerHTML = "";
   const shown = findings.filter(f => f.status !== "INFO" || f.detail);
   for (const f of shown) {
-    const row = document.createElement("div");
+    const row = document.createElement("li");
     row.className = "finding";
     const badgeCls = safeStatus(f.status);
     row.innerHTML = `
-      <span class="badge ${badgeCls}">${badgeCls}</span>
+      <span class="badge ${badgeCls}" aria-label="${badgeCls}">${badgeCls}</span>
       <span class="label">${escapeHtml(f.label)}</span>
       <span class="detail">${escapeHtml(f.detail || "")}${
         f.why ? `<span class="why">${escapeHtml(f.why)}</span>` : ""

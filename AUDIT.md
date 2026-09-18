@@ -187,12 +187,12 @@ The single most damaging correctness item is C4 (hardcoded anycast brand list in
 
 ## Accessibility Issues
 
-- **A1** — **Grade pill colour contrast** fails WCAG AA on the WARN (yellow-on-white) and INFO (grey-on-white) states. Confirmed by contrast-ratio spot-check.
-- **A2** — **Focus outline removed** on the scan button via `outline: none`; keyboard users cannot see focus.
-- **A3** — **No `aria-live` region** for SSE-streamed findings; screen readers do not announce results as they arrive.
-- **A4** — **Semantic HTML gap**: findings render as `<div>`s rather than `<table>` or `<ul>`; screen readers cannot navigate by row.
-- **A5** — **No `<label>` on the domain input** (only a placeholder).
-- **A6** — **Language attribute** on `<html>` is missing.
+- **A1** — ✅ **DONE** — Muted-text contrast. Honest correction: audit described the site as light-themed ("yellow-on-white / grey-on-white") but the UI is dark-themed (`--bg: #0e1218`). The real gap: `--muted: #8896a8` was used for `.finding .detail` and `.finding .why` at 12–13 px small text, hovering right at the WCAG AA 4.5:1 line against `#171d26`. Fix: brightened `--muted` and `--info` to `#b0bccd` (~7:1 against the card bg — plenty of margin). Regression pin in `tests/test_web_accessibility.py` requires each channel of `--muted` be ≥ `0xA0`.
+- **A2** — ✅ **DONE** — Focus outline. Audit said "scan button" but the actual removal was `input[type=text]:focus { outline: none; }` in `style.css`. The button used the browser default and was fine. Fix: added a global `:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }` so keyboard users get a visible ring but pointer clicks stay ring-free. Regression pin: `:focus-visible` must be present in `style.css`.
+- **A3** — ✅ **DONE** — Live regions. `#status` now carries `role="status" aria-live="polite"`, `#sections` carries `aria-live="polite" aria-relevant="additions"`, and `.header-grade` carries `aria-live="polite"` so the final overall grade is announced. Screen readers now hear each SSE-streamed section as it lands. Regression pins verify the attributes on both nodes.
+- **A4** — ✅ **DONE** — Semantic markup. `app.js::prepareSections` now emits `<h2>` for the section title (was `<span>`) so screen-reader users can navigate by heading, and `.section-body` is now a `<ul>` populated with `<li class="finding">` rows (was flat `<div>`s). Badges carry `aria-label` so their compact PASS/WARN/FAIL/INFO text is announced verbatim. CSS `.section-body { list-style: none; margin:0; padding:0 }` keeps the grid layout intact, and `.section-head h2` resets browser h2 typography so the visual row is unchanged.
+- **A5** — ✅ **DONE** — Domain input has `<label for="domain" class="sr-only">Domain name to check</label>`. `.sr-only` visually-hides the label without removing it from the accessibility tree (RFC-ish standard clip pattern). Regression pin greps for the `<label for="domain">` binding.
+- **A6** — 🟨 **N/A** — Language attribute was **already present**: `web/static/index.html:2` reads `<html lang="en">`. The audit was wrong. Regression pin locks it in so a future rewrite can't drop it silently.
 
 ## Test Coverage Gaps
 
