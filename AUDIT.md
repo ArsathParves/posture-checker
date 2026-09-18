@@ -179,9 +179,9 @@ The single most damaging correctness item is C4 (hardcoded anycast brand list in
 ## Web/UI Issues
 
 - **W1** — XSS (C1) is a Web/UI issue as well as a security one.
-- **W2** — SSE stream has no reconnection UI. If the connection drops mid-scan the user sees a half-populated table with no cue to retry.
-- **W3** — On mobile viewports (<600px) the finding table wraps awkwardly; grade pills overlap section headers.
-- **W4** — No dark-mode support despite the UI using dark palette colours; `prefers-color-scheme` is not honoured.
+- **W2** — ✅ **DONE** — SSE stream reconnection UI. On the `error` event `app.js` now renders an inline Retry button inside the `#status` region (which is aria-live=polite, so screen readers announce it). The Retry button re-dispatches the form's submit event so the same domain is re-scanned. The user no longer stares at a half-populated table wondering whether the scan is still running. Regression pin: the SSE error handler must contain the word "retry" and the DOM must expose a Retry surface.
+- **W3** — ✅ **DONE** — Mobile viewports (<640px). The `.section-head` used `display: flex; justify-content: space-between` with no wrap, so a long section title collided with the grade pill on narrow screens. Fix: inside the `@media (max-width: 640px)` block, add `flex-wrap: wrap; gap: 4px 12px` on `.section-head` and `flex-shrink: 0` on `.grade-pill`. Regression pin: the mobile media query must contain a `section-head` or `flex-wrap` reflow rule.
+- **W4** — ✅ **DONE** — Dark-mode chrome. Honest correction: the palette IS dark, so the audit's "no dark-mode support" wording is off; the real gap is that `color-scheme` was not declared, so Chromium rendered its scrollbars and native form widgets in *light* mode against the dark UI. Fix: added `color-scheme: dark` to `:root` (1 line). Full light-mode variant is out of scope for the POC. Regression pin: `:root` must declare `color-scheme: dark`.
 - **W5** — The `/healthz` 503 during degraded environment is correct per CLAUDE.md but the UI does not surface *why* — the front page should read "self-test failed: DNS interception detected" before letting the user submit a scan.
 - **W6** — The scan form has no CSRF token; on same-origin submissions this is fine, but if S2 (CORS) is fixed to allow specific origins, CSRF becomes reachable.
 

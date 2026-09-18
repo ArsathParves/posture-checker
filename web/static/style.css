@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #0e1218;
   --fg: #e6ecf3;
   --muted: #b0bccd;
@@ -67,6 +68,19 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
   border-radius: 6px; font-size: 13px; color: var(--muted);
 }
 .status.error { border-color: var(--fail); color: var(--fail); }
+/* W2 — inline Retry button inside the SSE error status. Sits in the
+   same row as the message so the eye finds it immediately. */
+.retry-btn {
+  margin-left: 8px;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--fail);
+  border: 1px solid var(--fail);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
 .hidden { display: none; }
 
 .report-header {
@@ -149,4 +163,12 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 @media (max-width: 640px) {
   .finding { grid-template-columns: 60px 1fr; }
   .finding .detail { grid-column: 1 / -1; padding-left: 72px; }
+  /* W3 — on narrow viewports a long section title collided with the
+     grade pill because `justify-content: space-between` doesn't wrap.
+     Reflow to a stacked column so both remain readable. */
+  .section-head {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+  .section-head .grade-pill { flex-shrink: 0; }
 }

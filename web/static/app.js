@@ -76,6 +76,27 @@ function showStatus(text, isError = false) {
   statusEl.classList.remove("hidden");
 }
 
+// W2 — render an error status line with an inline Retry button that
+// re-submits the form for the same domain. The button lives inside
+// the aria-live #status region so screen readers announce it.
+function showStatusWithRetry(text) {
+  statusEl.className = "status error";
+  statusEl.classList.remove("hidden");
+  statusEl.textContent = "";
+  const msg = document.createElement("span");
+  msg.textContent = text + " ";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.id = "retryBtn";
+  btn.className = "retry-btn";
+  btn.textContent = "Retry";
+  btn.addEventListener("click", () => {
+    form.dispatchEvent(new Event("submit", {cancelable: true}));
+  });
+  statusEl.appendChild(msg);
+  statusEl.appendChild(btn);
+}
+
 function prepareSections() {
   for (const name of SECTION_ORDER) {
     const el = document.createElement("div");
@@ -138,10 +159,12 @@ function openStream(checkId) {
   });
 
   currentSource.addEventListener("error", (e) => {
-    // EventSource errors don't always carry data
+    // W2 — EventSource errors don't always carry data; surface a
+    // Retry cue so the user isn't left staring at a half-populated
+    // table wondering whether the scan is still running.
     let msg = "Stream error";
     try { const d = JSON.parse(e.data); msg = d.message || msg; } catch (_) {}
-    showStatus(msg, true);
+    showStatusWithRetry(msg + " — connection lost.");
     submitBtn.disabled = false;
     if (currentSource) { currentSource.close(); currentSource = null; }
   });
