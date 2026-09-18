@@ -336,7 +336,8 @@ def _nameservers(rep: Report, d: str, skip_asn=False) -> dict:
     rep.add(S, "IPv6 (AAAA) on nameservers",
             "PASS" if len(v6) == len(ns_map) and ns_map else ("WARN" if v6 else "WARN"),
             f"{len(v6)}/{len(ns_map)} nameservers have AAAA records",
-            "" if len(v6) == len(ns_map) else "IPv6-only clients depend on AAAA-reachable nameservers.")
+            "" if len(v6) == len(ns_map) else "IPv6-only clients depend on AAAA-reachable nameservers.",
+            hardening=True)
 
     # per-NS reachability / lame delegation / serial drift
     env = rep.data.get("environment", {})
@@ -520,7 +521,8 @@ def _records(rep: Report, d: str):
     rep.add(S, "AAAA record (IPv6)",
             "PASS" if aaaa.get("records") else "WARN",
             ", ".join(aaaa.get("records", [])) or "none",
-            "" if aaaa.get("records") else "No IPv6 address — IPv6-only clients cannot reach the apex directly.")
+            "" if aaaa.get("records") else "No IPv6 address — IPv6-only clients cannot reach the apex directly.",
+            hardening=True)
 
     # CNAME at apex is an RFC violation
     if cname.get("ok") and cname.get("records"):
@@ -542,10 +544,12 @@ def _records(rep: Report, d: str):
                 ", ".join(mx_recs) or "none — domain does not receive mail")
 
     if caa.get("records"):
-        rep.add(S, "CAA record", "PASS", ", ".join(caa["records"]))
+        rep.add(S, "CAA record", "PASS", ", ".join(caa["records"]),
+                hardening=True)
     else:
         rep.add(S, "CAA record", "WARN", "none",
-                "Without CAA, any public CA may issue certificates for this domain (RFC 8659).")
+                "Without CAA, any public CA may issue certificates for this domain (RFC 8659).",
+                hardening=True)
 
     # Cross-check: authoritative view vs public-resolver (cached) view.
     ns_map = rep.data.get("ns_map", {})
@@ -590,7 +594,13 @@ def _dnssec(rep: Report, d: str):
         why = ("Without the cryptography wheel, DS/DNSKEY digest matching and RRSIG "
                "validation cannot run. All signed zones report as UNKNOWN until the "
                "dependency is available.")
-    rep.add(S, "DNSSEC status", status, detail, why)
+    # State-conditional hardening classification: adoption (`validating`) and
+    # deliberate non-adoption (`not_configured`, `unknown`) are hardening
+    # signals — never let them tank correctness. `broken` and `incomplete`
+    # are genuine misconfigurations (resolvers SERVFAIL) and MUST count in
+    # correctness, so hardening=False for those.
+    is_hardening = state in ("not_configured", "unknown", "validating")
+    rep.add(S, "DNSSEC status", status, detail, why, hardening=is_hardening)
 
     rep.add(S, "DS at parent", "INFO", "present" if st["ds"] else "absent")
     rep.add(S, "DNSKEY at child", "INFO", "present" if st["dnskey"] else "absent")
@@ -737,7 +747,8 @@ def _email(rep: Report, d: str, dkim_selectors):
         rep.add(S, "DMARC policy", status, f"p={dmarc['policy']} (pct={dmarc['pct']})", why)
         rep.add(S, "DMARC reporting", "PASS" if dmarc.get("rua") else "WARN",
                 dmarc.get("rua") or "no rua= aggregate reporting address",
-                "" if dmarc.get("rua") else "Without rua you get no visibility into who is sending as your domain.")
+                "" if dmarc.get("rua") else "Without rua you get no visibility into who is sending as your domain.",
+                hardening=True)
 
     if rep.data.get("null_mx"):
         rep.add(S, "Inbound mail checks", "INFO",
@@ -754,9 +765,11 @@ def _email(rep: Report, d: str, dkim_selectors):
     if sts.get("mta_sts") is not None and rep.data.get("records", {}).get("MX", {}).get("records"):
         rep.add(S, "MTA-STS", "PASS" if sts["mta_sts"] else "WARN",
                 "present" if sts["mta_sts"] else "absent",
-                "" if sts["mta_sts"] else "MTA-STS enforces TLS for inbound mail (RFC 8461).")
+                "" if sts["mta_sts"] else "MTA-STS enforces TLS for inbound mail (RFC 8461).",
+                hardening=True)
         rep.add(S, "TLS-RPT", "PASS" if sts["tls_rpt"] else "WARN",
-                "present" if sts["tls_rpt"] else "absent")
+                "present" if sts["tls_rpt"] else "absent",
+                hardening=True)
 
 
 # ---------------------------------------------------------------- grading
@@ -900,44 +913,19 @@ def grade(rep: Report) -> dict:
     # google.com. We separate the two:
     #   - correctness_grade: only genuine misconfigurations count as failures
     #   - hardening_grade:   optional-feature adoption
-    # The headline "overall" now tracks correctness; hardening is reported
-    # alongside so a visitor sees both without one masking the other.
-    # HARDENING_ABSENCE: features that are optional/improving but not critical.
-    # These findings should not penalize correctness grade; they affect hardening grade only.
-    # Criteria: "not configured" or "weakly configured", not "broken".
-    # Examples:
-    #   - DNSSEC: unsigned is OK (not_configured); broken is not OK.
-    #   - AAAA: absent is OK; pointing to wrong address is not OK.
-    #   - SPF qualifier: weak ~all is OK (not broken); redirected absent is not OK.
-    #   - MTA-STS: absent is OK; misconfigured is not OK.
-    HARDENING_ABSENCE = {
-        "DNSSEC status",            # only when state == not_configured
-        "CAA record",               # absent CAA is optional
-        "MTA-STS", "TLS-RPT",       # optional hardening for mail
-        "AAAA record (IPv6)", "IPv6 (AAAA) on nameservers",  # optional but increasingly expected
-        "DMARC reporting",          # optional reporting endpoint
-        # Note: "SPF 'all' qualifier" removed because weak ~all is presence not absence.
-        # If SPF exists with ~all: partial protection (correctness OK, hardening weak)
-        # If SPF absent: no protection (correctness failure). These should not be grouped.
-    }
-
-    def is_hardening_absence(f):
-        if f.label not in HARDENING_ABSENCE:
-            return False
-        # DNSSEC "broken" is a real misconfig; only "not configured" is absence
-        # Exception: if the section failed to run (report is degraded), treat DNSSEC
-        # issues as hardening absence, not correctness failure
-        if f.label == "DNSSEC status":
-            dnssec_data = rep.data.get("dnssec")
-            if dnssec_data is None:
-                # Section failed; don't penalize correctness
-                return True
-            return dnssec_data.get("state") == "not_configured"
-        return f.status in ("WARN", "FAIL")
+    # Classification lives on each Finding (`f.hardening`) — the emit site
+    # is authoritative. There is no global label set to keep in sync; new
+    # hardening checks self-declare by passing `hardening=True` to
+    # `Report.add()`. See `Finding.hardening` in core.py for the semantics.
+    def _is_hardening_absence(f):
+        # Hardening findings drag hardening grade only when the feature is
+        # unadopted (WARN/FAIL). PASS on a hardening check is credit that
+        # also counts toward correctness — adopting an optional feature
+        # signals good posture across both dimensions.
+        return f.hardening and f.status in ("WARN", "FAIL")
 
     correctness_findings = [f for f in rep.findings
-                            if f.is_scored and not is_hardening_absence(f)]
-    hardening_findings = [f for f in rep.findings if is_hardening_absence(f)]
+                            if f.is_scored and not _is_hardening_absence(f)]
 
     def _grade_set(findings):
         if not findings:
@@ -948,11 +936,10 @@ def grade(rep: Report) -> dict:
         return _band(pct, has_fail)
 
     correctness_grade = _grade_set(correctness_findings)
+    hardening_scored = [f for f in rep.findings if f.hardening and f.is_scored]
     hardening_pts = sum(2 if f.status == "PASS" else (1 if f.status == "WARN" else 0)
-                        for f in rep.findings
-                        if f.label in HARDENING_ABSENCE and f.is_scored)
-    hardening_total = sum(1 for f in rep.findings
-                          if f.label in HARDENING_ABSENCE and f.is_scored)
+                        for f in hardening_scored)
+    hardening_total = len(hardening_scored)
     hardening_grade = (_band(hardening_pts / (2 * hardening_total), False)
                        if hardening_total else "—")
 

@@ -63,10 +63,10 @@ def _google_shaped_report() -> Report:
                 "4/4 nameservers responded"),
         Finding("Nameserver posture", "Network diversity", "PASS",
                 "1 operator (Google, AS15169) — large anycast estate"),
-        # Hardening-absence-eligible key: PASS here because google.com's
-        # nameservers ARE dual-stack.
+        # Hardening-eligible: PASS here because google.com's nameservers
+        # ARE dual-stack. hardening=True mirrors the emit site (checks._nameservers).
         Finding("Nameserver posture", "IPv6 (AAAA) on nameservers", "PASS",
-                "4/4 nameservers have AAAA"),
+                "4/4 nameservers have AAAA", hardening=True),
 
         # ---- SOA & zone hygiene ----
         Finding("SOA & zone hygiene", "SOA present", "PASS", "SOA OK"),
@@ -74,21 +74,22 @@ def _google_shaped_report() -> Report:
 
         # ---- Core records ----
         Finding("Core records", "A record (apex)", "PASS", "1 A record"),
-        # Hardening-absence-eligible: PASS because google.com has AAAA.
+        # Hardening-eligible: PASS because google.com has AAAA. Emit site sets hardening=True.
         Finding("Core records", "AAAA record (IPv6)", "PASS",
-                "1 AAAA record"),
+                "1 AAAA record", hardening=True),
         Finding("Core records", "CNAME at apex", "PASS",
                 "no CNAME at apex (compliant)"),
-        # Hardening-absence-eligible: PASS because google.com publishes CAA.
+        # Hardening-eligible: PASS because google.com publishes CAA.
         Finding("Core records", "CAA record", "PASS",
-                "CAA records present"),
+                "CAA records present", hardening=True),
         Finding("Core records", "MX record", "PASS", "5 MX records"),
 
         # ---- DNSSEC ----
-        # This is the sole non-adoption. state=not_configured → grade()
-        # routes it into the hardening bucket, NOT correctness.
+        # This is the sole non-adoption. state=not_configured → emit site
+        # sets hardening=True; grade() routes it into the hardening bucket
+        # via the attribute, NOT correctness.
         Finding("DNSSEC", "DNSSEC status", "FAIL",
-                "Zone not signed — DS/DNSKEY absent"),
+                "Zone not signed — DS/DNSKEY absent", hardening=True),
 
         # ---- Email authentication ----
         Finding("Email authentication", "SPF", "PASS",
@@ -101,16 +102,16 @@ def _google_shaped_report() -> Report:
                 "known selector answered"),
         Finding("Email authentication", "DMARC policy", "PASS",
                 "p=reject"),
-        # Hardening-absence-eligible: PASS because google.com publishes rua.
+        # Hardening-eligible: PASS because google.com publishes rua.
         Finding("Email authentication", "DMARC reporting", "PASS",
-                "rua=mailto:mailauth-reports@google.com"),
+                "rua=mailto:mailauth-reports@google.com", hardening=True),
 
         # ---- Security posture ----
-        # Hardening-absence-eligible: PASS because google.com publishes both.
+        # Hardening-eligible: PASS because google.com publishes both.
         Finding("Security posture", "MTA-STS", "PASS",
-                "policy present, mode=enforce"),
+                "policy present, mode=enforce", hardening=True),
         Finding("Security posture", "TLS-RPT", "PASS",
-                "rua=mailto:..."),
+                "rua=mailto:...", hardening=True),
         Finding("Security posture", "AXFR (zone transfer)", "PASS",
                 "refused on all 4 nameservers"),
         Finding("Security posture", "Open recursive resolver", "PASS",

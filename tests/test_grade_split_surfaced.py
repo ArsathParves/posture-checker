@@ -46,8 +46,10 @@ def _mixed_report() -> Report:
     rep.findings = [
         Finding("Nameservers", "Nameserver count", "PASS", "4 nameservers"),
         Finding("Email auth", "SPF", "PASS", "v=spf1 -all"),
+        # hardening=True: DNSSEC state=not_configured is deliberate non-adoption,
+        # not misconfiguration. Post-G2 the emit site (_dnssec) sets this itself.
         Finding("DNSSEC", "DNSSEC status", "FAIL",
-                "Zone not signed — DS/DNSKEY absent"),
+                "Zone not signed — DS/DNSKEY absent", hardening=True),
     ]
     rep.data["dnssec"] = {"state": "not_configured"}
     return rep

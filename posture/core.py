@@ -25,6 +25,15 @@ class Finding:
     status: str  # PASS | WARN | FAIL | INFO | UNKNOWN
     detail: str = ""
     why: str = ""  # why it matters (shown to user)
+    # True when this finding represents adoption/absence of an optional
+    # hardening feature (DNSSEC signing, CAA, MTA-STS, IPv6, DMARC rua, ...)
+    # rather than a real misconfiguration. Read by `checks.grade`:
+    #   - PASS + hardening=True → credit in both correctness and hardening buckets
+    #   - WARN/FAIL + hardening=True → hardening bucket only (does not drag correctness)
+    #   - hardening=False → correctness bucket regardless of status
+    # Emit-site is authoritative — the classification lives with the check
+    # that knows the answer, not in a global label set in grade().
+    hardening: bool = False
 
     @property
     def is_scored(self) -> bool:
@@ -41,8 +50,8 @@ class Report:
     data: dict[str, Any] = field(default_factory=dict)
     degraded: list[str] = field(default_factory=list)  # modules that failed
 
-    def add(self, section, label, status, detail="", why=""):
-        self.findings.append(Finding(section, label, status, detail, why))
+    def add(self, section, label, status, detail="", why="", hardening=False):
+        self.findings.append(Finding(section, label, status, detail, why, hardening))
 
     def section(self, name: str) -> list[Finding]:
         return [f for f in self.findings if f.section == name]
