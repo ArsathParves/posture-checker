@@ -129,6 +129,18 @@ def render(rep, show_info=True, as_json=False, strict=False):
     if g.get("provisional"):
         header.append("  (provisional)", style="yellow")
     header.append(f"\nChecked as of {ts}", style="dim")
+    # L2: when correctness and hardening diverge, the two-letter header
+    # ("Correctness: A · Hardening: C") is opaque — the user reads the
+    # worse letter as "broken" without knowing which optional features
+    # accounted for the gap. Name them explicitly so the grade is
+    # decodable. Silent on a matching sub-grade (nothing to explain).
+    gaps = g.get("hardening_gaps") or []
+    if gaps and g.get("correctness_grade") != g.get("hardening_grade"):
+        header.append(
+            f"\nⓘ Hardening reflects optional-feature adoption; "
+            f"not adopted: {', '.join(gaps)}",
+            style="dim",
+        )
     if rep.degraded:
         header.append(f"\n⚠ Degraded modules (incomplete data): {', '.join(rep.degraded)}",
                       style="yellow")

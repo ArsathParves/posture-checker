@@ -1024,9 +1024,18 @@ def grade(rep: Report, strict: bool = False) -> dict:
     unknowns = [f.section for f in rep.findings if f.status == "UNKNOWN"]
     provisional = bool(ungraded or unknowns or rep.degraded)
 
+    # L2: name the un-adopted optional features driving the hardening
+    # grade. A bare "Hardening: C" letter is opaque; downstream renderers
+    # use this list to caption "no MTA-STS, no TLS-RPT" so the letter is
+    # decodable rather than mysterious. PASS findings are adopted → not
+    # listed. Order is emit order (stable across runs).
+    hardening_gaps = [f.label for f in rep.findings
+                      if f.hardening and f.status in ("WARN", "FAIL")]
+
     return {"sections": out, "overall": order[min(overall_idx, 4)],
             "correctness_grade": correctness_grade,
             "hardening_grade": hardening_grade,
+            "hardening_gaps": hardening_gaps,
             "provisional": provisional,
             "ungraded_sections": ungraded,
             "unknown_in": sorted(set(unknowns))}
