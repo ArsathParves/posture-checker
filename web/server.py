@@ -118,6 +118,50 @@ def _parse_allowed_origins(raw: str | None) -> list[str] | None:
     return parts
 
 
+_SECURITY_HEADERS = {
+    # S5: SPA has zero inline scripts / inline styles / inline event
+    # handlers (audited when writing tests/test_web_security_headers.py).
+    # Keep the CSP strict — no 'unsafe-inline', no 'unsafe-eval'.
+    # `connect-src 'self'` covers the SSE stream. `img-src ... data:`
+    # is a defensive allowance in case a favicon is inlined later; no
+    # scheme is on the allowlist for scripts/styles/frames.
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "font-src 'self'; "
+        "object-src 'none'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'none'; "
+        "form-action 'self'"
+    ),
+    # S6: standard hardening headers.
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    # Deny the sensitive Permissions-Policy features by name. The list
+    # is deliberately explicit rather than a wildcard so the intent is
+    # readable in security audits.
+    "Permissions-Policy": (
+        "geolocation=(), microphone=(), camera=(), "
+        "usb=(), payment=(), accelerometer=(), gyroscope=(), "
+        "magnetometer=(), autoplay=(), fullscreen=()"
+    ),
+}
+
+
+async def _security_headers_middleware(request, call_next):
+    """Attach the S5+S6 defence-in-depth headers to every response.
+
+    Headers-only — body is untouched. Kept as a plain async middleware
+    rather than a subclass so the surface is trivially reviewable."""
+    response = await call_next(request)
+    for k, v in _SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
+    return response
+
+
 def _build_app() -> FastAPI:
     """FastAPI factory. Attached to a module-level `app` at import
     time (that's what `uvicorn web.server:app` binds), and re-invoked
@@ -135,6 +179,8 @@ def _build_app() -> FastAPI:
         version="0.4-poc",
     )
     application.state.limiter = limiter
+
+    application.middleware("http")(_security_headers_middleware)
 
     allowed = _parse_allowed_origins(os.environ.get("POSTURE_ALLOWED_ORIGINS"))
     if allowed is not None:

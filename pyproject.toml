@@ -60,6 +60,10 @@ performance = [
 ]
 dev = [
     "pytest>=7",
+    # httpx is used by `fastapi.testclient.TestClient` (S5+S6 test
+    # suite). Not a runtime dep of the web layer — only the test tree
+    # imports TestClient.
+    "httpx>=0.23",
 ]
 
 # Console-script entry points. After `pip install .`, `posture-cli` and
