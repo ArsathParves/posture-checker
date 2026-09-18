@@ -7,6 +7,18 @@ from typing import Any
 
 import dns.dnssec
 import dns.exception
+
+# DNSSEC validation delegates its crypto primitives to `cryptography`.
+# When the wheel is missing, `dns.dnssec.validate` and `dns.dnssec.make_ds`
+# raise `ImportError` at call time. The old code caught that with a bare
+# `except Exception: continue`, silently causing `ds_matches_dnskey=False`
+# and reporting the zone as "broken" — a CLAUDE.md rule 1 violation
+# (unretrievable collapsed into broken). Detect it up front instead.
+try:  # pragma: no cover — import behaviour, not logic
+    import cryptography  # noqa: F401
+    _HAS_CRYPTOGRAPHY = True
+except ImportError:  # pragma: no cover
+    _HAS_CRYPTOGRAPHY = False
 import dns.flags
 import dns.message
 import dns.name
@@ -291,7 +303,19 @@ def dnssec_status(domain: str) -> dict:
         "ad_authenticated": None,   # validating resolver sets AD bit
         "validated": None,          # overall: fully anchored + validating
         "algorithms": [], "notes": [], "state": "unknown",
+        "cryptography_available": _HAS_CRYPTOGRAPHY,
     }
+
+    # Without `cryptography`, `dns.dnssec.validate` and `make_ds` cannot run;
+    # any signed zone would otherwise be reported as broken (CLAUDE.md rule 1
+    # violation). Report UNKNOWN with a specific note and skip the network
+    # probes — nothing they return can be validated.
+    if not _HAS_CRYPTOGRAPHY:
+        out["notes"].append(
+            "cryptography module not installed — DNSSEC validation skipped. "
+            "Install the `cryptography` package to enable full chain validation."
+        )
+        return out
 
     name = dns.name.from_text(domain)
 

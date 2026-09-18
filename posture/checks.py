@@ -581,6 +581,15 @@ def _dnssec(rep: Report, d: str):
         "unknown": ("UNKNOWN", "Could not determine", ""),
     }
     status, detail, why = mapping[state]
+    # Missing `cryptography` produces a UNKNOWN. The generic "Could not
+    # determine" copy hides an actionable fact — the operator can restore
+    # DNSSEC coverage for every domain by installing one package.
+    if st.get("cryptography_available") is False:
+        detail = ("cryptography module not installed — DNSSEC validation skipped "
+                  "(install the `cryptography` Python package to enable it).")
+        why = ("Without the cryptography wheel, DS/DNSKEY digest matching and RRSIG "
+               "validation cannot run. All signed zones report as UNKNOWN until the "
+               "dependency is available.")
     rep.add(S, "DNSSEC status", status, detail, why)
 
     rep.add(S, "DS at parent", "INFO", "present" if st["ds"] else "absent")
