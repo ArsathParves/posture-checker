@@ -217,11 +217,9 @@ def evaluate_dkim(domain: str, extra_selectors=None) -> dict:
         return None
 
     with ThreadPoolExecutor(max_workers=12) as ex:
-        found = [f for f in ex.map(probe, selectors) if f and not f.get("unretrievable")]
+        results = list(ex.map(probe, selectors))
 
-    # Check if any probe returned unretrievable
-    any_unretrievable = any(f for f in ex.map(probe, selectors) if f and f.get("unretrievable"))
-    if any_unretrievable:
+    if any(r and r.get("unretrievable") for r in results):
         return {
             "found": None,
             "selectors": [],
@@ -231,6 +229,7 @@ def evaluate_dkim(domain: str, extra_selectors=None) -> dict:
             "label": "DKIM check incomplete: one or more selectors unretrievable",
         }
 
+    found = [r for r in results if r]
     valid = [f for f in found if f["state"] == "valid"]
     revoked = [f for f in found if f["state"] == "revoked"]
     return {
