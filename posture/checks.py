@@ -825,8 +825,32 @@ def _security(rep: Report, d: str):
                 "arbitrary domains — usable in DNS amplification DDoS attacks. "
                 "Authoritative and recursive roles should be separated.")
     elif otested:
-        rep.add(S, "Open recursive resolver", "PASS",
-                f"No open recursion on {len(otested)} tested nameserver(s)")
+        # D5: a server that advertises recursion (RA=1) but refused OUR probes
+        # is not necessarily safe — a source-subnet-based ACL may still serve
+        # recursion to other clients. Same for divergent behaviour between
+        # our two probes. Never collapse "inconclusive" into PASS.
+        partial = [h for h, r in openres["per_ns"].items()
+                   if r.get("partial_recursion")]
+        variance = [h for h, r in openres["per_ns"].items()
+                    if r.get("subnet_variance") and not r.get("partial_recursion")]
+        if partial:
+            rep.add(S, "Open recursive resolver", "WARN",
+                    f"Recursion advertised but refused from our vantage on: "
+                    f"{', '.join(partial)}",
+                    "Nameserver's RA bit is set (recursion is supported) but "
+                    "queries from our source were refused. Source-subnet-based "
+                    "ACLs may still serve recursion to other client subnets — "
+                    "verify from a second vantage or disable recursion entirely "
+                    "on authoritative servers.")
+        elif variance:
+            rep.add(S, "Open recursive resolver", "WARN",
+                    f"Inconsistent recursion behaviour across probes on: "
+                    f"{', '.join(variance)}",
+                    "Different probes elicited different recursion behaviour "
+                    "(likely subnet-dependent). Confirm from another vantage.")
+        else:
+            rep.add(S, "Open recursive resolver", "PASS",
+                    f"No open recursion on {len(otested)} tested nameserver(s)")
     else:
         rep.add(S, "Open recursive resolver", "UNKNOWN",
                 "Could not complete open-resolver test", "")

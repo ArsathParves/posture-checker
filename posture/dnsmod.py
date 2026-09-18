@@ -533,6 +533,37 @@ def axfr_open_check(domain: str, ns_map: dict) -> dict:
     return {"any_open": any_open, "per_ns": results}
 
 
+# Two probe names — a single static probe (e.g. a cached target) can be
+# gamed or coincidentally denied; the pair reduces both false PASS and
+# false FAIL from a single unlucky query.
+_OPEN_RESOLVER_PROBE_NAMES = ("www.google.com", "www.wikipedia.org")
+
+# EDNS Client Subnet used on probe #2. A single-host tool cannot really
+# spoof its source IP, but it CAN tell the target "the client I represent
+# lives in this subnet" via ECS. Some resolvers use ECS in their ACL
+# decision; even when they do not, distinct ECS values expand the
+# observational surface.  203.0.113.0/24 is TEST-NET-3 (RFC 5737).
+_OPEN_RESOLVER_ECS_SUBNET = "203.0.113.0"
+_OPEN_RESOLVER_ECS_PREFIX = 24
+
+
+def _open_resolver_probe(ip: str, name: str, ecs: bool = False):
+    """Send one recursion probe to `ip` for `name`. Returns
+    (ra_flag: bool, answered_foreign: bool, rcode: int) or raises."""
+    import dns.edns
+    q = dns.message.make_query(name, "A", use_edns=0, payload=4096)
+    q.flags |= dns.flags.RD
+    if ecs:
+        opt = dns.edns.ECSOption(_OPEN_RESOLVER_ECS_SUBNET, _OPEN_RESOLVER_ECS_PREFIX)
+        q.use_edns(0, options=[opt], payload=4096)
+        q.flags |= dns.flags.RD
+    resp = dns.query.udp(q, ip, timeout=TIMEOUT)
+    ra = bool(resp.flags & dns.flags.RA)
+    answered = any(rr.rdtype == dns.rdatatype.A
+                   for rrset in resp.answer for rr in rrset)
+    return ra, answered, resp.rcode()
+
+
 def open_resolver_check(ns_map: dict) -> dict:
     """Test whether a domain's authoritative nameservers also answer as OPEN
     RECURSIVE resolvers for third-party names.
@@ -541,8 +572,20 @@ def open_resolver_check(ns_map: dict) -> dict:
     domains for anyone is an open resolver -- usable in DNS amplification
     DDoS attacks and a sign of misconfiguration (authoritative and recursive
     roles should be separated).
+
+    D5: two probes per NS. Probe A is a bare recursion request; probe B
+    attaches an EDNS Client Subnet option naming a documentation prefix
+    to represent a client on a different subnet, and uses a different
+    probe name. Together they detect:
+
+      - `open`: any probe returned recursion for a foreign name → FAIL.
+      - `partial_recursion`: RA=1 but no answer → server supports
+        recursion and refused OUR probes; may serve other subnets. WARN.
+      - `subnet_variance`: probes disagreed on the classification →
+        subnet-dependent behaviour, also WARN.
+
+    Never collapses inconclusive into PASS (CLAUDE.md rule 1).
     """
-    probe = "www.google.com"
     results: dict[str, dict] = {}
     any_open = False
     for host, ips in ns_map.items():
@@ -550,20 +593,41 @@ def open_resolver_check(ns_map: dict) -> dict:
         if not ip:
             results[host] = {"tested": False, "reason": "no A record"}
             continue
-        try:
-            q = dns.message.make_query(probe, "A")
-            q.flags |= dns.flags.RD          # request recursion
-            resp = dns.query.udp(q, ip, timeout=TIMEOUT)
-            # Open resolver = recursion available AND it actually answered for
-            # a domain it is not authoritative for.
-            ra = bool(resp.flags & dns.flags.RA)
-            answered = any(rr.rdtype == dns.rdatatype.A
-                           for rrset in resp.answer for rr in rrset)
-            is_open = ra and answered and resp.rcode() == dns.rcode.NOERROR
-            results[host] = {"tested": True, "open": is_open,
-                             "ra_flag": ra, "answered_foreign": answered}
-            if is_open:
-                any_open = True
-        except Exception as e:
-            results[host] = {"tested": False, "reason": type(e).__name__}
+        probe_a = _OPEN_RESOLVER_PROBE_NAMES[0]
+        probe_b = _OPEN_RESOLVER_PROBE_NAMES[1]
+        probes = []
+        errors = []
+        for name, use_ecs in ((probe_a, False), (probe_b, True)):
+            try:
+                probes.append(_open_resolver_probe(ip, name, ecs=use_ecs))
+            except Exception as e:
+                errors.append(type(e).__name__)
+        if not probes:
+            # No probe returned — cannot conclude anything.
+            results[host] = {"tested": False, "reason": errors[0] if errors else "unknown"}
+            continue
+        # Aggregate across probes: worst-case wins for openness detection.
+        any_answered = any(p[1] for p in probes)
+        any_ra = any(p[0] for p in probes)
+        any_open_probe = any(p[0] and p[1] and p[2] == dns.rcode.NOERROR for p in probes)
+        # partial_recursion: any probe advertised recursion but refused to answer.
+        partial_recursion = any(p[0] and not p[1] for p in probes)
+        # subnet_variance: RA or answered flags differ between the two probes.
+        subnet_variance = False
+        if len(probes) == 2:
+            subnet_variance = (probes[0][0] != probes[1][0]) or \
+                              (probes[0][1] != probes[1][1])
+        results[host] = {
+            "tested": True,
+            "open": bool(any_open_probe),
+            "ra_flag": any_ra,
+            "answered_foreign": any_answered,
+            "partial_recursion": bool(partial_recursion and not any_open_probe),
+            "subnet_variance": bool(subnet_variance),
+            "probes_run": len(probes),
+        }
+        if errors:
+            results[host]["partial_errors"] = errors
+        if any_open_probe:
+            any_open = True
     return {"any_open": any_open, "per_ns": results}
