@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
@@ -12,6 +14,54 @@ from rich.table import Table
 from rich.text import Text
 
 from .checks import SECTIONS, grade, run
+
+
+# S8: first-run banner. The tool makes live queries against real third-
+# party infra; users should know that on first invocation. Acked once
+# per machine via a small file under XDG_CONFIG_HOME; the env-var opt-
+# out is for CI / scripted runs and deliberately does NOT persist ack.
+
+def _ack_file_path() -> Path:
+    """Locate the first-run ack file (XDG-standard)."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "posture-checker" / "first-run.ack"
+
+
+_FIRST_RUN_BANNER = (
+    "posture-checker: first-run notice\n"
+    "  This tool makes LIVE queries against real third-party infrastructure:\n"
+    "    • recursive DNS resolvers (public + your default)\n"
+    "    • authoritative nameservers of the checked domain\n"
+    "    • RDAP registries (IANA, ARIN, NIXI, per-TLD)\n"
+    "    • AXFR probes (TCP/53) against the domain's nameservers\n"
+    "    • HTTPS fetches for MTA-STS / bootstrap data\n"
+    "  This is normally fine (the domain owner could run these themselves),\n"
+    "  but be aware of it before probing domains you don't operate.\n"
+    "  Set POSTURE_ACK_FIRST_RUN=1 to skip this message.\n"
+)
+
+
+def _maybe_show_first_run_banner():
+    """Print the first-run banner to stderr if it has not been acked.
+
+    Writes an ack file after printing so subsequent runs are silent.
+    `POSTURE_ACK_FIRST_RUN=1` in the env skips the banner AND skips the
+    ack write — CI / one-shot scripts don't persist state for the
+    interactive user who shares the box."""
+    if os.environ.get("POSTURE_ACK_FIRST_RUN") == "1":
+        return
+    ack = _ack_file_path()
+    if ack.exists():
+        return
+    print(_FIRST_RUN_BANNER, file=sys.stderr)
+    try:
+        ack.parent.mkdir(parents=True, exist_ok=True)
+        ack.write_text("acked\n", encoding="utf-8")
+    except OSError:
+        # A read-only $HOME (e.g. some container images) shouldn't
+        # crash the CLI — just skip the ack write and reprint next time.
+        pass
 
 console = Console()
 
@@ -177,6 +227,9 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv=None):
     ap = _build_parser()
     args = ap.parse_args(argv)
+
+    # S8: warn on first invocation that we probe third-party infra.
+    _maybe_show_first_run_banner()
 
     try:
         rep = run(args.domain, dkim_selectors=args.dkim_selector, skip_asn=args.skip_asn)
