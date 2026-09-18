@@ -32,7 +32,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 from posture.checks import grade, run_streaming
 from posture.core import normalize_domain
@@ -73,7 +72,30 @@ CHECK_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
 
 # ---------------------------------------------------------------- app
 
-limiter = Limiter(key_func=get_remote_address)
+def _rate_limit_key(request) -> str:
+    """Rate-limit key: the raw socket peer, always.
+
+    slowapi's default `get_remote_address` reads `request.client.host`,
+    which starlette derives from the ASGI `scope["client"]`. uvicorn's
+    default (`proxy_headers=True` + `forwarded_allow_ips="127.0.0.1"`)
+    overwrites `scope["client"]` with the leftmost `X-Forwarded-For`
+    entry whenever the immediate TCP peer is 127.0.0.1 — turning XFF
+    into a fully-controllable rate-limit key on same-host deployments
+    (and during dev/test loopback runs). A crawler could rotate the
+    header and bypass the per-IP quota.
+
+    This helper unconditionally reads the socket-peer host, so the
+    limiter is safe regardless of proxy_headers state or ASGI server
+    choice. Falls back to `127.0.0.1` on absent client to match
+    slowapi's own behaviour (never lets a request escape the bucket).
+    """
+    client = getattr(request, "client", None)
+    if not client or not getattr(client, "host", None):
+        return "127.0.0.1"
+    return client.host
+
+
+limiter = Limiter(key_func=_rate_limit_key)
 app = FastAPI(title="VergeCloud domain posture checker",
               description="POC web wrapper. Same check engine as the CLI.",
               version="0.4-poc")
@@ -313,7 +335,21 @@ if _STATIC.exists():
 def main():
     """Console-script entry point (`posture-web`). Cross-platform: uses
     plain uvicorn.run so it works on Windows too — no reliance on the
-    shell wrapper or on uvloop from `uvicorn[standard]`."""
+    shell wrapper or on uvloop from `uvicorn[standard]`.
+
+    S3: `proxy_headers=False` by default so `X-Forwarded-For` cannot
+    influence `scope["client"]`, and by extension cannot influence
+    the rate-limit key. Operators fronting the tool with a real
+    reverse proxy can opt in via `POSTURE_TRUST_PROXY=1` — but even
+    then the rate-limit key is the socket peer (see `_rate_limit_key`).
+    The env var controls trust for downstream logging / audit uses of
+    `request.client.host`, not the rate limiter.
+    """
+    import os
     import uvicorn
 
-    uvicorn.run("web.server:app", host="127.0.0.1", port=8000)
+    trust_proxy = os.environ.get("POSTURE_TRUST_PROXY", "").lower() in {
+        "1", "true", "yes"
+    }
+    uvicorn.run("web.server:app", host="127.0.0.1", port=8000,
+                proxy_headers=trust_proxy)
