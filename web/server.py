@@ -96,12 +96,67 @@ def _rate_limit_key(request) -> str:
 
 
 limiter = Limiter(key_func=_rate_limit_key)
-app = FastAPI(title="VergeCloud domain posture checker",
-              description="POC web wrapper. Same check engine as the CLI.",
-              version="0.4-poc")
-app.state.limiter = limiter
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
-                   allow_headers=["*"])
+
+
+def _parse_allowed_origins(raw: str | None) -> list[str] | None:
+    """Parse the `POSTURE_ALLOWED_ORIGINS` env var into an explicit
+    allow-list, or return None if CORS should not be enabled.
+
+    Empty / unset → None (no CORSMiddleware attached → same-origin only).
+    A `*` anywhere in the list → ValueError. The whole point of S2 is
+    banishing `*`; silently degrading to it would recreate the bug the
+    env-var was introduced to fix.
+    """
+    if not raw or not raw.strip():
+        return None
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if any(p == "*" for p in parts):
+        raise ValueError(
+            "POSTURE_ALLOWED_ORIGINS must not contain a wildcard `*`. "
+            "List the exact origins you want to allow, e.g. "
+            "'https://vergecloud.com,https://www.vergecloud.com'."
+        )
+    return parts
+
+
+def _build_app() -> FastAPI:
+    """FastAPI factory. Attached to a module-level `app` at import
+    time (that's what `uvicorn web.server:app` binds), and re-invoked
+    by tests that need a fresh app under a controlled env state.
+
+    Middleware attached here MUST NOT depend on module-level route
+    decorators (`@app.get` etc.) since those are declared later at
+    module scope; Starlette composes the middleware stack lazily so
+    the ordering works out."""
+    import os
+
+    application = FastAPI(
+        title="VergeCloud domain posture checker",
+        description="POC web wrapper. Same check engine as the CLI.",
+        version="0.4-poc",
+    )
+    application.state.limiter = limiter
+
+    allowed = _parse_allowed_origins(os.environ.get("POSTURE_ALLOWED_ORIGINS"))
+    if allowed is not None:
+        # Explicit allow-list. `allow_credentials=False` to match the
+        # POC's no-cookie / no-auth surface — flipping this on would
+        # require re-auditing every endpoint for credential-theft
+        # paths, and there's no reason to today.
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Content-Type"],
+            allow_credentials=False,
+        )
+    # Default (allowed is None): no CORSMiddleware — same-origin only.
+    # This is deliberate: the tool is served alongside its own static
+    # SPA, so same-origin XHR covers 100% of the intended traffic.
+    return application
+
+
+app = _build_app()
 
 
 @app.exception_handler(RateLimitExceeded)
