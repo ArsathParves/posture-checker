@@ -621,19 +621,33 @@ def open_resolver_check(ns_map: dict) -> dict:
     results: dict[str, dict] = {}
     any_open = False
     for host, ips in ns_map.items():
-        ip = (ips.get("ipv4") or [None])[0]
-        if not ip:
-            results[host] = {"tested": False, "reason": "no A record"}
+        # FN5: probe every address family the NS publishes. A v4-clean
+        # NS whose v6 gateway ACL was never wired up is a real misconfig
+        # class — probing only v4 declares PASS while v6 leaks. Silently
+        # skipping an IPv6-only NS with "no A record" was likewise a lie
+        # about the tool's coverage.
+        v4 = ips.get("ipv4") or []
+        v6 = ips.get("ipv6") or []
+        probe_ips = []
+        if v4:
+            probe_ips.append(v4[0])
+        if v6:
+            probe_ips.append(v6[0])
+        if not probe_ips:
+            results[host] = {"tested": False, "reason": "no address"}
             continue
         probe_a = _OPEN_RESOLVER_PROBE_NAMES[0]
         probe_b = _OPEN_RESOLVER_PROBE_NAMES[1]
         probes = []
         errors = []
-        for name, use_ecs in ((probe_a, False), (probe_b, True)):
-            try:
-                probes.append(_open_resolver_probe(ip, name, ecs=use_ecs))
-            except Exception as e:
-                errors.append(type(e).__name__)
+        # Probe each address family with both probe variants (plain + ECS).
+        # Worst-case aggregation across the full probe set below.
+        for ip in probe_ips:
+            for name, use_ecs in ((probe_a, False), (probe_b, True)):
+                try:
+                    probes.append(_open_resolver_probe(ip, name, ecs=use_ecs))
+                except Exception as e:
+                    errors.append(type(e).__name__)
         if not probes:
             # No probe returned — cannot conclude anything.
             results[host] = {"tested": False, "reason": errors[0] if errors else "unknown"}
@@ -644,11 +658,16 @@ def open_resolver_check(ns_map: dict) -> dict:
         any_open_probe = any(p[0] and p[1] and p[2] == dns.rcode.NOERROR for p in probes)
         # partial_recursion: any probe advertised recursion but refused to answer.
         partial_recursion = any(p[0] and not p[1] for p in probes)
-        # subnet_variance: RA or answered flags differ between the two probes.
+        # subnet_variance: RA or answered flags differ across the probe
+        # set. Extended in FN5 to cover the ≥2-probe case (v4+v6 duals
+        # yield 4 probes) — any disagreement is a signal that ACL
+        # behaviour depends on the probing vantage.
         subnet_variance = False
-        if len(probes) == 2:
-            subnet_variance = (probes[0][0] != probes[1][0]) or \
-                              (probes[0][1] != probes[1][1])
+        if len(probes) >= 2:
+            subnet_variance = (
+                len({p[0] for p in probes}) > 1
+                or len({p[1] for p in probes}) > 1
+            )
         results[host] = {
             "tested": True,
             "open": bool(any_open_probe),
