@@ -300,6 +300,14 @@ def _nameservers(rep: Report, d: str, skip_asn=False) -> dict:
             rep.add(S, "Parent delegation vs zone NS", "FAIL", "; ".join(det),
                     "Real delegation mismatch — resolvers using the parent-side NS set "
                     "will hit servers the zone does not list, or miss servers the zone does.")
+        if parent.get("consensus") is False and parent.get("views"):
+            views = parent["views"]
+            summary = "; ".join(f"{h}: {', '.join(v) or '(empty)'}" for h, v in sorted(views.items()))
+            rep.add(S, "Parent-side NS agreement", "WARN",
+                    f"Parent NSes disagree on delegation — {summary}",
+                    "Different parent nameservers return different NS sets for this zone. "
+                    "Resolvers hitting the stale server(s) will see out-of-date delegation. "
+                    "Ask the parent-zone operator to reconcile.")
     else:
         rep.add(S, "Parent delegation vs zone NS", "UNKNOWN",
                 f"Could not query parent zone ({parent.get('error')})",

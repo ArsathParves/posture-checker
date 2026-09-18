@@ -153,6 +153,31 @@ def probe_each_ns(domain: str, ns_map: dict) -> dict:
     return results
 
 
+# How many parent-side NSes we query in parallel to detect divergence.
+# The parent zone can itself have inconsistent secondaries — e.g. one NS
+# returns a stale delegation while its peers return the current one. A
+# single-sample view masks that. Cap avoids over-fanning on TLDs with 13
+# root-style servers.
+_PARENT_QUERY_MAX = 4
+
+
+def _query_parent_ns_view(domain: str, parent_ns_host: str, parent_ip: str) -> tuple[str, list[str] | None]:
+    """Ask one parent NS directly for the child's NS records.
+
+    Returns (host, ns_list) on success, (host, None) on failure. Never raises."""
+    try:
+        msg = dns.message.make_query(domain, "NS")
+        resp = dns.query.udp(msg, parent_ip, timeout=TIMEOUT)
+        ns = []
+        for rrset in list(resp.answer) + list(resp.authority):
+            if rrset.rdtype == dns.rdatatype.NS:
+                for rr in rrset:
+                    ns.append(str(rr).rstrip(".").lower())
+        return parent_ns_host, sorted(set(ns))
+    except Exception:
+        return parent_ns_host, None
+
+
 def parent_delegation(domain: str) -> dict:
     """Query the parent zone's authoritative NS for the child's NS records.
 
@@ -160,6 +185,11 @@ def parent_delegation(domain: str) -> dict:
     or be under-reported by the registry (observed on .bank.in via NIXI), which
     would produce a false 'delegation mismatch' FAIL. Parent-side delegation
     is the correct source of truth.
+
+    Queries up to `_PARENT_QUERY_MAX` parent NSes in parallel. When they all
+    agree, `consensus=True` and the shape is backward-compatible. When they
+    disagree, `consensus=False` and `views` names the disagreeing hosts so
+    downstream can emit a specific divergence finding.
     """
     labels = domain.split(".")
     if len(labels) < 2:
@@ -170,36 +200,48 @@ def parent_delegation(domain: str) -> dict:
         if not parent_ns_res.get("ok") or not parent_ns_res.get("records"):
             return {"ok": False, "error": "parent_ns_lookup_failed"}
 
-        # Try each parent NS until we find one with an A record (fallback to AAAA)
-        parent_ip = None
-        parent_ns_host = None
+        # Resolve up to _PARENT_QUERY_MAX parent NSes to IPs (A preferred, AAAA fallback).
+        targets: list[tuple[str, str]] = []
         for ns_name in parent_ns_res["records"]:
+            if len(targets) >= _PARENT_QUERY_MAX:
+                break
             ns_host = str(ns_name).rstrip(".")
-            # Try A record first (IPv4)
-            parent_ip_res = query(ns_host, "A")
-            if parent_ip_res.get("ok") and parent_ip_res.get("records"):
-                parent_ip = parent_ip_res["records"][0]
-                parent_ns_host = ns_host
-                break
-            # Fall back to AAAA (IPv6) if A lookup fails
-            parent_ipv6_res = query(ns_host, "AAAA")
-            if parent_ipv6_res.get("ok") and parent_ipv6_res.get("records"):
-                parent_ip = parent_ipv6_res["records"][0]
-                parent_ns_host = ns_host
-                break
+            a_res = query(ns_host, "A")
+            if a_res.get("ok") and a_res.get("records"):
+                targets.append((ns_host, a_res["records"][0]))
+                continue
+            aaaa_res = query(ns_host, "AAAA")
+            if aaaa_res.get("ok") and aaaa_res.get("records"):
+                targets.append((ns_host, aaaa_res["records"][0]))
 
-        if not parent_ip or not parent_ns_host:
+        if not targets:
             return {"ok": False, "error": "parent_ip_lookup_failed"}
 
-        msg = dns.message.make_query(domain, "NS")
-        resp = dns.query.udp(msg, parent_ip, timeout=TIMEOUT)
-        ns = []
-        for rrset in list(resp.answer) + list(resp.authority):
-            if rrset.rdtype == dns.rdatatype.NS:
-                for rr in rrset:
-                    ns.append(str(rr).rstrip(".").lower())
-        return {"ok": True, "nameservers": sorted(set(ns)),
-                "queried_via": parent_ns_host}
+        # Query each parent NS in parallel; each returns its own view of the child's NS set.
+        from concurrent.futures import ThreadPoolExecutor
+        views: dict[str, list[str]] = {}
+        with ThreadPoolExecutor(max_workers=len(targets)) as ex:
+            for host, ns_list in ex.map(
+                lambda t: _query_parent_ns_view(domain, t[0], t[1]), targets
+            ):
+                if ns_list is not None:
+                    views[host] = ns_list
+
+        if not views:
+            return {"ok": False, "error": "parent_query_failed"}
+
+        # Consensus = every responding parent NS returned the same NS set.
+        first_view = next(iter(views.values()))
+        consensus = all(v == first_view for v in views.values())
+        result = {
+            "ok": True,
+            "nameservers": first_view,
+            "queried_via": sorted(views.keys()),
+            "consensus": consensus,
+        }
+        if not consensus:
+            result["views"] = views
+        return result
     except Exception as e:
         return {"ok": False, "error": type(e).__name__}
 
