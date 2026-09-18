@@ -140,14 +140,27 @@ def _extract_vcard_fn(vcard: list) -> str | None:
 
     RFC 6350: vCard structure varies by tool; FN component may have different formats.
     This function safely extracts the text value without assumptions about indexing.
+
+    E7: The returned string is NFC-normalised and whitespace-stripped so
+    that two RDAP responses containing the same visible name are byte-
+    identical (an NFD payload from one registry and an NFC payload from
+    another must not dedupe as different) and so that stray CR/LF or
+    padding from malformed payloads never propagates into findings.
+    A non-string value (some vCard emitters ship a list at item[3])
+    returns None rather than raising or leaking a list downstream.
     """
+    import unicodedata
+
     if not vcard or len(vcard) < 2:
         return None
     try:
         for item in vcard[1]:  # vCard components are in [1]
             if item and len(item) >= 4 and item[0] == "fn":
-                # item[3] contains the text value in standard vCard format
-                return item[3]
+                value = item[3]
+                if not isinstance(value, str):
+                    return None
+                normalised = unicodedata.normalize("NFC", value).strip()
+                return normalised or None
     except (IndexError, TypeError):
         pass
     return None
