@@ -781,37 +781,51 @@ def _security(rep: Report, d: str):
         return
 
     # --- AXFR / zone transfer -----------------------------------------
-    axfr = dnsmod.axfr_open_check(d, ns_map)
-    rep.data["axfr"] = axfr
-    tested = [h for h, r in axfr["per_ns"].items() if r.get("tested")]
-    if axfr["any_open"]:
-        leaked = [(h, r.get("records_leaked"))
-                  for h, r in axfr["per_ns"].items() if r.get("open")]
-        detail = "; ".join(f"{h} leaked {n} records" for h, n in leaked)
-        rep.add(S, "Zone transfer (AXFR)", "FAIL", detail,
-                "Nameserver allows anonymous full zone transfer — the entire zone "
-                "(every subdomain and internal host) is exposed to anyone. "
-                "Restrict AXFR to authorised secondaries only.")
-    elif tested:
-        rep.add(S, "Zone transfer (AXFR)", "PASS",
-                f"Refused by all {len(tested)} tested nameserver(s)")
+    # D6: mirror the TxtUnretrievable symmetry. AXFR is TCP-only; if the
+    # env self-test flagged TCP/53 as unavailable, no probe result can
+    # be trusted. Short-circuit with an explicit UNKNOWN naming the
+    # pre-flight finding — never a false PASS/FAIL from a doomed probe.
+    if env.get("tcp53_direct") is False:
+        rep.add(S, "Zone transfer (AXFR)", "UNKNOWN",
+                "AXFR untestable — TCP/53 unavailable on this network path "
+                "(environment self-test blocked TCP/53).",
+                "AXFR runs over TCP only; without TCP/53 the check cannot "
+                "distinguish 'server refused' from 'we could not reach it'. "
+                "Re-run on a network path where TCP/53 is permitted.")
+        # Skip only AXFR — open-resolver uses UDP and is still meaningful.
+        axfr = None
     else:
-        reasons = [r.get("reason") for r in axfr["per_ns"].values() if r.get("reason")]
-        timed_out = [r for r in reasons if r == "timeout"]
-        if timed_out and len(timed_out) == len(reasons):
-            detail = (f"AXFR test timeout on all {len(timed_out)} nameserver(s) "
-                      f"after {dnsmod.AXFR_TIMEOUT}s — slow link or unresponsive TCP/53")
-        elif timed_out:
-            detail = (f"Could not complete AXFR test — {len(timed_out)} of "
-                      f"{len(reasons)} nameserver(s) hit timeout after "
-                      f"{dnsmod.AXFR_TIMEOUT}s; others failed with: "
-                      + ", ".join(sorted(set(r for r in reasons if r != "timeout"))))
+        axfr = dnsmod.axfr_open_check(d, ns_map)
+        rep.data["axfr"] = axfr
+        tested = [h for h, r in axfr["per_ns"].items() if r.get("tested")]
+        if axfr["any_open"]:
+            leaked = [(h, r.get("records_leaked"))
+                      for h, r in axfr["per_ns"].items() if r.get("open")]
+            detail = "; ".join(f"{h} leaked {n} records" for h, n in leaked)
+            rep.add(S, "Zone transfer (AXFR)", "FAIL", detail,
+                    "Nameserver allows anonymous full zone transfer — the entire zone "
+                    "(every subdomain and internal host) is exposed to anyone. "
+                    "Restrict AXFR to authorised secondaries only.")
+        elif tested:
+            rep.add(S, "Zone transfer (AXFR)", "PASS",
+                    f"Refused by all {len(tested)} tested nameserver(s)")
         else:
-            detail = ("Could not complete AXFR test (TCP/53 may be blocked on this path) "
-                      "— reasons: " + ", ".join(sorted(set(reasons)))) if reasons else \
-                     "Could not complete AXFR test (TCP/53 may be blocked on this path)"
-        rep.add(S, "Zone transfer (AXFR)", "UNKNOWN", detail,
-                "Zone-transfer exposure could not be determined.")
+            reasons = [r.get("reason") for r in axfr["per_ns"].values() if r.get("reason")]
+            timed_out = [r for r in reasons if r == "timeout"]
+            if timed_out and len(timed_out) == len(reasons):
+                detail = (f"AXFR test timeout on all {len(timed_out)} nameserver(s) "
+                          f"after {dnsmod.AXFR_TIMEOUT}s — slow link or unresponsive TCP/53")
+            elif timed_out:
+                detail = (f"Could not complete AXFR test — {len(timed_out)} of "
+                          f"{len(reasons)} nameserver(s) hit timeout after "
+                          f"{dnsmod.AXFR_TIMEOUT}s; others failed with: "
+                          + ", ".join(sorted(set(r for r in reasons if r != "timeout"))))
+            else:
+                detail = ("Could not complete AXFR test (TCP/53 may be blocked on this path) "
+                          "— reasons: " + ", ".join(sorted(set(reasons)))) if reasons else \
+                         "Could not complete AXFR test (TCP/53 may be blocked on this path)"
+            rep.add(S, "Zone transfer (AXFR)", "UNKNOWN", detail,
+                    "Zone-transfer exposure could not be determined.")
 
     # --- open recursive resolver --------------------------------------
     openres = dnsmod.open_resolver_check(ns_map)
