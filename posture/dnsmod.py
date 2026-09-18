@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from collections import OrderedDict
 from typing import Any
 
 import dns.dnssec
@@ -29,7 +30,11 @@ def _resolver(nameservers=None, dnssec=False) -> dns.resolver.Resolver:
     return r
 
 
-_qcache: dict = {}
+# TTL-aware DNS query cache. OrderedDict + LRU eviction bounds *size*
+# (memory), while the per-entry (value, expiry) tuple bounds *freshness*
+# (correctness). Both invariants matter and are tested separately.
+_QCACHE_MAX = 2048
+_qcache: OrderedDict = OrderedDict()
 
 
 def query(domain: str, rdtype: str, nameservers=None) -> dict:
@@ -38,6 +43,7 @@ def query(domain: str, rdtype: str, nameservers=None) -> dict:
     if key in _qcache:
         res, expiry = _qcache[key]
         if time.time() < expiry:
+            _qcache.move_to_end(key)  # LRU: mark this key as recently used
             return res
         else:
             # Cache entry expired, remove it
@@ -45,6 +51,8 @@ def query(domain: str, rdtype: str, nameservers=None) -> dict:
     res = _query_uncached(domain, rdtype, nameservers)
     # Cache for TTL duration; default to 300s if TTL not available
     ttl = res.get("ttl", 300) if res.get("ok") else 60  # Shorter TTL for errors
+    if len(_qcache) >= _QCACHE_MAX:
+        _qcache.popitem(last=False)  # evict least-recently-used
     _qcache[key] = (res, time.time() + ttl)
     return res
 
