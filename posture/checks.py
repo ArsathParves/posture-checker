@@ -547,9 +547,35 @@ def _records(rep: Report, d: str):
         rep.add(S, "CAA record", "PASS", ", ".join(caa["records"]),
                 hardening=True)
     else:
-        rep.add(S, "CAA record", "WARN", "none",
-                "Without CAA, any public CA may issue certificates for this domain (RFC 8659).",
-                hardening=True)
+        # RFC 8659 §3: a CA queries the FQDN's CAA, and if empty walks
+        # up the tree until it finds a set (stopping short of the root).
+        # A subdomain with no CAA whose parent zone publishes CAA IS
+        # constrained by that parent policy — reporting "any CA may
+        # issue" would be factually wrong and would collapse rule-1
+        # "already covered" into "broken". Walk parents ≥2 labels; stop
+        # short of the eTLD (a TLD-level CAA is exceedingly rare and
+        # not worth the extra query on every check).
+        inherited_from = None
+        inherited_records: list[str] = []
+        parts = d.split(".")
+        for i in range(1, len(parts) - 1):
+            parent = ".".join(parts[i:])
+            pc = dnsmod.query(parent, "CAA")
+            if pc.get("records"):
+                inherited_from = parent
+                inherited_records = pc["records"]
+                break
+        if inherited_from:
+            rep.add(S, "CAA record", "PASS",
+                    f"inherited from {inherited_from}: "
+                    f"{', '.join(inherited_records)}",
+                    "No CAA at this label; per RFC 8659 §3 issuing CAs "
+                    "walk the label tree, so the ancestor's policy applies.",
+                    hardening=True)
+        else:
+            rep.add(S, "CAA record", "WARN", "none",
+                    "Without CAA, any public CA may issue certificates for this domain (RFC 8659).",
+                    hardening=True)
 
     # Cross-check: authoritative view vs public-resolver (cached) view.
     ns_map = rep.data.get("ns_map", {})
