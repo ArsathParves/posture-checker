@@ -10,8 +10,16 @@ import requests
 
 RDAP_BOOTSTRAP_URL = "https://data.iana.org/rdap/dns.json"
 RDAP_IP_BOOTSTRAP_URL = "https://data.iana.org/rdap/ipv4.json"
-UA = "vergecloud-posture-checker/0.1 (prototype)"
+# S9: outbound HTTP must name the tool + version + a contact URL.
+# Third parties (IANA, ARIN, NIXI, DNS/RDAP registries) get our traffic;
+# a distinctive UA lets them rate-limit our tool specifically instead
+# of an entire IP block, and gives them a way to reach us if the tool's
+# traffic pattern is problematic.
+UA = "posture-checker/0.5 (+https://github.com/vergecloud/posture-checker)"
 HEADERS = {"Accept": "application/rdap+json", "User-Agent": UA}
+# For non-RDAP outbound calls (IANA bootstrap, follow-up JSON fetches
+# where the server is not necessarily an RDAP endpoint).
+UA_HEADERS = {"User-Agent": UA}
 
 # ---------------------------------------------------------------- findings
 
@@ -149,7 +157,7 @@ def _load_bootstrap() -> dict[str, str]:
         # Cache expired, remove it
         del _bootstrap_cache["dns"]
 
-    r = requests.get(RDAP_BOOTSTRAP_URL, timeout=20)
+    r = requests.get(RDAP_BOOTSTRAP_URL, headers=UA_HEADERS, timeout=20)
     r.raise_for_status()
     j = r.json()
     mapping: dict[str, str] = {}
@@ -309,7 +317,7 @@ def _ip_endpoints(ip: str) -> list[str]:
     try:
         # Load IP bootstrap with 24-hour TTL
         if "ipv4" not in _ip_bootstrap:
-            r = requests.get(RDAP_IP_BOOTSTRAP_URL, timeout=20)
+            r = requests.get(RDAP_IP_BOOTSTRAP_URL, headers=UA_HEADERS, timeout=20)
             r.raise_for_status()
             data = r.json()
             _ip_bootstrap["ipv4"] = (data, time.time() + 86400)
@@ -317,7 +325,7 @@ def _ip_endpoints(ip: str) -> list[str]:
             data, expiry = _ip_bootstrap["ipv4"]
             if time.time() >= expiry:
                 # Cache expired, reload
-                r = requests.get(RDAP_IP_BOOTSTRAP_URL, timeout=20)
+                r = requests.get(RDAP_IP_BOOTSTRAP_URL, headers=UA_HEADERS, timeout=20)
                 r.raise_for_status()
                 data = r.json()
                 _ip_bootstrap["ipv4"] = (data, time.time() + 86400)
