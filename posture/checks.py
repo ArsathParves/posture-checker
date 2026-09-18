@@ -9,13 +9,41 @@ from .core import Report, ip_rdap, normalize_domain, parse_rdap, rdap_lookup
 
 # Operators running large multi-PoP anycast estates. A single-operator NS set
 # here is a deliberate architecture, not a naive single point of failure.
-# Curated on purpose: registry ownership drifts, so this needs review, not a
-# one-time hardcode.
+#
+# Two tables, checked in this order:
+#   1. LARGE_ANYCAST_ASNS — ASN is the protocol source of truth for network
+#      identity; Team Cymru gives it back reliably. Entries here are pinned
+#      by verified AS number.
+#   2. LARGE_ANYCAST_OPERATORS — legacy brand-string set kept as a fallback
+#      when ASN lookup fails or the ASN has not been verified into the table
+#      above. New entries should be added to the ASN table when the ASN is
+#      known; the brand set is a phase-out target.
+LARGE_ANYCAST_ASNS: dict[int, str] = {
+    141383: "VergeCloud",
+}
 LARGE_ANYCAST_OPERATORS = {
     "cloudflare", "google", "amazon", "akamai", "microsoft", "azure",
     "verisign", "ns1", "dyn", "oracle", "neustar", "ultradns", "gcore",
     "fastly", "vercel", "digitalocean", "alibaba", "tencent",
+    "vergecloud",
 }
+
+
+def _is_large_anycast_operator(asn: int | None, org_string: str | None) -> bool:
+    """Classify an NS operator as running a large multi-PoP anycast estate.
+
+    ASN is checked first (data-driven, verifiable). If ASN is not known,
+    fall back to a case-insensitive substring match against the legacy
+    brand-string set — this covers operators whose ASN has not yet been
+    pinned into ``LARGE_ANYCAST_ASNS`` but whose org name Team Cymru
+    returns in a recognisable form.
+    """
+    if asn is not None and asn in LARGE_ANYCAST_ASNS:
+        return True
+    if not org_string:
+        return False
+    blob = org_string.lower()
+    return any(k in blob for k in LARGE_ANYCAST_OPERATORS)
 
 SECTIONS = [
     "Registration & delegation",
@@ -356,14 +384,26 @@ def _nameservers(rep: Report, d: str, skip_asn=False) -> dict:
 
     # provider identification via IP RDAP / ASN (labelled as network operator)
     if not skip_asn:
-        owners = {}
+        # One ip_rdap per NS host — the previous code queried twice per host
+        # (once for the org string, once for the ASN); one query returns both.
+        host_info: dict[str, dict] = {}
+        org_owners: dict[str, str] = {}
+        asn_owners: dict[str, str] = {}
         for host, ips in ns_map.items():
             ip = (ips["ipv4"] or [None])[0]
             if not ip:
                 continue
             info = ip_rdap(ip)
-            if info.get("ok"):
-                owners[host] = info.get("org") or info.get("name") or info.get("handle")
+            if not info.get("ok"):
+                continue
+            host_info[host] = info
+            org_owners[host] = info.get("org") or info.get("name") or info.get("handle")
+            if info.get("asn"):
+                asn_owners[host] = f"AS{info['asn']} ({info['org']})"
+
+        # Prefer ASN-based grouping when Cymru data is available -- IP-range
+        # RIR names for leased ranges can still show as "Private Customer".
+        owners = asn_owners if asn_owners else org_owners
         rep.data["ns_owners"] = owners
         if owners:
             distinct = {v for v in owners.values() if v}
@@ -371,21 +411,13 @@ def _nameservers(rep: Report, d: str, skip_asn=False) -> dict:
                     "; ".join(f"{h} → {o}" for h, o in owners.items()),
                     "Identified from IP registry data — this is the network operator, "
                     "which may differ from the customer-facing DNS brand.")
-            # Prefer ASN-based grouping when Cymru data is available -- IP-range
-            # RIR names for leased ranges can still show as "Private Customer".
-            asn_owners = {}
-            for host, ips in ns_map.items():
-                ip = (ips["ipv4"] or [None])[0]
-                if not ip: continue
-                info = ip_rdap(ip)
-                if info.get("ok") and info.get("asn"):
-                    asn_owners[host] = f"AS{info['asn']} ({info['org']})"
-            if asn_owners:
-                distinct = {v for v in asn_owners.values() if v}
-                owners = asn_owners  # override display so the section is consistent
-                rep.data["ns_owners"] = owners
-            blob = " ".join(str(v).lower() for v in distinct)
-            big_anycast = any(k in blob for k in LARGE_ANYCAST_OPERATORS)
+            # Anycast classification runs per-host on the (asn, org) tuple —
+            # if ANY host is on a known anycast ASN, the single-operator set
+            # is treated as an anycast estate, not a correlated-failure risk.
+            big_anycast = any(
+                _is_large_anycast_operator(info.get("asn"), info.get("org"))
+                for info in host_info.values()
+            )
             if len(distinct) > 1:
                 rep.add(S, "Network diversity", "PASS",
                         f"{len(distinct)} distinct operator(s): " + "; ".join(sorted(distinct)))
