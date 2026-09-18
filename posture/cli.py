@@ -88,6 +88,17 @@ def render(rep, show_info=True, as_json=False, strict=False):
     if g.get("unknown_in"):
         header.append(f"\n⚠ Unresolved checks in: {', '.join(g['unknown_in'])}",
                       style="yellow")
+    # L1: the environment self-test computes actionable notes ("UDP/53 is
+    # intercepted", "TCP/53 is blocked") but until now the CLI only
+    # showed a small "(provisional)" tag — easy to miss on a busy
+    # terminal. Surface the specific reasons so the user knows the
+    # provisional grade is a *network* failure, not a domain failure.
+    env_notes = rep.data.get("environment", {}).get("notes") or []
+    if env_notes:
+        header.append("\n⚠ Self-test warnings (network path unreliable):",
+                      style="bold yellow")
+        for n in env_notes:
+            header.append(f"\n   • {n}", style="yellow")
     console.print(Panel(header, title="Domain Posture Check", border_style="cyan"))
 
     # ---- sections
