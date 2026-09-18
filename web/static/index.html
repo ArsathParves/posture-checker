@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VergeCloud domain posture checker — POC</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>Domain posture check</h1>
+    <p class="sub">Enter a domain to see its DNS, delegation, DNSSEC, and email-authentication posture. Results stream in as each section completes. POC — same check engine as the CLI, no data stored.</p>
+  </div>
+</header>
+
+<main class="wrap">
+  <form id="checkForm" autocomplete="off">
+    <input type="text" id="domain" name="domain" placeholder="example.com" required autofocus>
+    <button type="submit" id="submitBtn">Check</button>
+  </form>
+
+  <div id="status" class="status hidden"></div>
+
+  <div id="header" class="report-header hidden">
+    <div class="header-domain"></div>
+    <div class="header-grade"></div>
+    <div class="header-meta"></div>
+  </div>
+
+  <div id="sections"></div>
+
+  <div id="footer" class="footer hidden">
+    <p>Prototype. Results are a point-in-time snapshot of public DNS/RDAP data.
+    DKIM &ldquo;not found&rdquo; means not found under common selectors, not that DKIM is absent.
+    Multi-region performance benchmarking is not part of this build.</p>
+  </div>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

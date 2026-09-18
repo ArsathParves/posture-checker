@@ -1,0 +1,8 @@
+dnspython>=2.4
+rich>=13
+requests>=2.31
+cryptography>=42
+fastapi>=0.100
+uvicorn[standard]>=0.23
+pydantic>=2
+slowapi>=0.1.9
