@@ -68,6 +68,18 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
   border-radius: 6px; font-size: 13px; color: var(--muted);
 }
 .status.error { border-color: var(--fail); color: var(--fail); }
+/* W5 — landing banner shown when /healthz preflight reports the
+   deploy environment is degraded (DNS interception, TCP/53 blocked,
+   AA-flag rewrite). Warm-yellow border so it reads as a warning,
+   not a stop-the-world error. */
+.env-banner {
+  padding: 12px 14px; margin-bottom: 16px;
+  background: rgba(245,180,0,0.08);
+  border: 1px solid var(--warn); border-radius: 6px;
+  font-size: 13px; color: var(--fg);
+}
+.env-banner strong { color: var(--warn); }
+.env-banner ul { margin: 6px 0 0 20px; padding: 0; color: var(--muted); }
 /* W2 — inline Retry button inside the SSE error status. Sits in the
    same row as the message so the eye finds it immediately. */
 .retry-btn {

@@ -18,8 +18,59 @@ const statusEl = document.getElementById("status");
 const headerEl = document.getElementById("header");
 const sectionsEl = document.getElementById("sections");
 const footerEl = document.getElementById("footer");
+const envBannerEl = document.getElementById("envBanner");
 
 let currentSource = null;
+
+// W5 — Preflight /healthz on load so the user is warned about a
+// degraded network path BEFORE they submit. /healthz returns 503
+// with a JSON payload naming the interception / TCP/53 / AA-flag
+// problems detected by posture.selftest.check_environment.
+async function preflightEnvironment() {
+  try {
+    const resp = await fetch("/healthz", {headers: {"Accept": "application/json"}});
+    let data = null;
+    try { data = await resp.json(); } catch (_) { /* opaque body */ }
+    if (resp.ok && data && data.status === "ok") return;  // healthy → no banner
+    renderEnvBanner(data);
+  } catch (_) {
+    // Network error hitting our own /healthz is itself a signal —
+    // surface it so the user doesn't submit a doomed scan.
+    renderEnvBanner({status: "unreachable", environment: null});
+  }
+}
+
+function renderEnvBanner(healthz) {
+  const env = (healthz && healthz.environment) || {};
+  const notes = Array.isArray(env.notes) ? env.notes : [];
+  envBannerEl.textContent = "";
+  const heading = document.createElement("strong");
+  heading.textContent = "Server environment is degraded — results may be incomplete.";
+  envBannerEl.appendChild(heading);
+  const desc = document.createElement("div");
+  const bits = [];
+  if (env.intercepted) bits.push("DNS interception detected");
+  if (env.aa_flag_trustworthy === false) bits.push("authoritative-flag rewriting");
+  if (env.tcp53_direct === false) bits.push("TCP/53 blocked (truncated responses cannot be retried)");
+  if (!bits.length && healthz && healthz.status === "unreachable")
+    bits.push("/healthz endpoint unreachable");
+  desc.textContent = bits.length
+    ? "Detected: " + bits.join("; ") + "."
+    : "Per-nameserver probing will be suppressed on this server.";
+  envBannerEl.appendChild(desc);
+  if (notes.length) {
+    const ul = document.createElement("ul");
+    for (const n of notes) {
+      const li = document.createElement("li");
+      li.textContent = n;
+      ul.appendChild(li);
+    }
+    envBannerEl.appendChild(ul);
+  }
+  envBannerEl.classList.remove("hidden");
+}
+
+preflightEnvironment();
 
 // Fixed set of finding statuses the server can emit. Any value outside
 // this set is coerced to "INFO" before use — status flows into a CSS
