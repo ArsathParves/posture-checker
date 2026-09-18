@@ -41,6 +41,13 @@ from posture.selftest import check_environment
 CACHE_TTL_SECONDS = 300       # 5 minutes
 CHECK_JOB_TTL_SECONDS = 900   # jobs held for polling for 15 min
 MAX_CONCURRENT_CHECKS = 8     # per process
+# S7: per-connection ceiling for the SSE stream. A slowloris-style
+# client that holds a stream open past this gets a `timeout` event
+# and the connection closes. The Job itself is preserved so the
+# client can reconnect or fetch /result — CHECK_JOB_TTL_SECONDS still
+# governs when the job is discarded. 120s is generous for the check
+# itself (typical run: 10–30s) but bounds a hung connection tightly.
+SSE_MAX_STREAM_SECONDS = 120
 
 
 # ---------------------------------------------------------------- state
@@ -400,6 +407,11 @@ async def stream_check(check_id: str):
         last_version = job._event_version
         # SSE heartbeat: keep proxies from closing an idle stream
         last_heartbeat = time.time()
+        # S7: per-connection wall-clock ceiling. Read at loop entry
+        # so tests can monkeypatch SSE_MAX_STREAM_SECONDS before the
+        # request lands. The Job is preserved on timeout — a client
+        # can reconnect or fetch /result.
+        deadline = time.time() + SSE_MAX_STREAM_SECONDS
         while True:
             # Emit any new events since last check
             while seen < len(job.events):
@@ -410,6 +422,13 @@ async def stream_check(check_id: str):
             if job.done and seen >= len(job.events):
                 yield "event: end\ndata: {}\n\n"
                 return
+            if time.time() >= deadline:
+                yield "event: timeout\n"
+                yield ("data: " + json.dumps({
+                    "reason": "SSE stream exceeded per-connection ceiling",
+                    "max_seconds": SSE_MAX_STREAM_SECONDS,
+                }) + "\n\n")
+                return
             # Wait for new events (version change) or job completion
             # Check version before waiting to avoid race: if version changed between
             # the event emission loop and here, don't wait.
@@ -417,8 +436,11 @@ async def stream_check(check_id: str):
                 last_version = job._event_version
                 continue
             job._wake.clear()
+            # Wait at most until the deadline, so a completely-idle
+            # stream still terminates when the ceiling fires.
+            wait_budget = min(15.0, max(0.0, deadline - time.time()))
             try:
-                await asyncio.wait_for(job._wake.wait(), timeout=15.0)
+                await asyncio.wait_for(job._wake.wait(), timeout=wait_budget)
             except asyncio.TimeoutError:
                 pass
             finally:

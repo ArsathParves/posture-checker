@@ -64,6 +64,10 @@ dev = [
     # suite). Not a runtime dep of the web layer — only the test tree
     # imports TestClient.
     "httpx>=0.23",
+    # Async test drivers for S7 SSE-timeout tests. `asyncio_mode = auto`
+    # in pytest.ini so `async def test_*` functions run without an
+    # explicit @pytest.mark.asyncio decorator per test.
+    "pytest-asyncio>=0.23",
 ]
 
 # Console-script entry points. After `pip install .`, `posture-cli` and
