@@ -276,6 +276,15 @@ def evaluate_mta_sts(domain: str) -> dict:
     except TxtUnretrievable:
         return {"mta_sts": None, "tls_rpt": None, "unretrievable": True}
     txts = [t for t in sts_records if t.lower().startswith("v=stsv1")]
-    tlsrpt = [t for t in _txt_records(f"_smtp._tls.{domain}")
-              if t.lower().startswith("v=tlsrptv1")]
+    # TLS-RPT lives at a different name (_smtp._tls.<domain>) so its
+    # retrievability is independent of the MTA-STS record. CLAUDE.md
+    # rule 1: if this lookup is truncated / TCP/53 is blocked, the
+    # correct state is "unknown", NOT "absent" — a False here would
+    # render "TLS-RPT: absent" for a domain that in fact publishes one.
+    try:
+        tlsrpt_records = _txt_records(f"_smtp._tls.{domain}")
+    except TxtUnretrievable:
+        return {"mta_sts": bool(txts), "tls_rpt": None,
+                "tls_rpt_unretrievable": True}
+    tlsrpt = [t for t in tlsrpt_records if t.lower().startswith("v=tlsrptv1")]
     return {"mta_sts": bool(txts), "tls_rpt": bool(tlsrpt)}

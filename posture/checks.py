@@ -763,13 +763,33 @@ def _email(rep: Report, d: str, dkim_selectors):
     sts = emailauth.evaluate_mta_sts(d)
     rep.data["mta_sts"] = sts
     if sts.get("mta_sts") is not None and rep.data.get("records", {}).get("MX", {}).get("records"):
-        rep.add(S, "MTA-STS", "PASS" if sts["mta_sts"] else "WARN",
-                "present" if sts["mta_sts"] else "absent",
-                "" if sts["mta_sts"] else "MTA-STS enforces TLS for inbound mail (RFC 8461).",
+        _emit_mta_sts_findings(rep, S, sts)
+
+
+def _emit_mta_sts_findings(rep: Report, section: str, sts: dict) -> None:
+    """Render MTA-STS and TLS-RPT findings from an ``evaluate_mta_sts``
+    result. Split out from ``_email`` so the rule-1 UNKNOWN path for a
+    truncated TLS-RPT lookup can be exercised in a unit test without
+    stubbing every upstream lookup in the email-auth section."""
+    rep.add(section, "MTA-STS", "PASS" if sts["mta_sts"] else "WARN",
+            "present" if sts["mta_sts"] else "absent",
+            "" if sts["mta_sts"] else "MTA-STS enforces TLS for inbound mail (RFC 8461).",
+            hardening=True)
+    if sts.get("tls_rpt_unretrievable"):
+        # Rule 1: unretrievable is NOT absent. Report as UNKNOWN and
+        # attach an explicit "why" so the reader knows the lookup was
+        # truncated / TCP/53 blocked, rather than the record being
+        # missing from the domain.
+        rep.add(section, "TLS-RPT", "UNKNOWN",
+                "Could not retrieve _smtp._tls TXT records",
+                "TLS-RPT lookup was truncated or TCP/53 was blocked; "
+                "not reported as absent (CLAUDE.md rule 1).",
                 hardening=True)
-        rep.add(S, "TLS-RPT", "PASS" if sts["tls_rpt"] else "WARN",
-                "present" if sts["tls_rpt"] else "absent",
-                hardening=True)
+        rep.degraded.append("TLS-RPT (unretrievable)")
+        return
+    rep.add(section, "TLS-RPT", "PASS" if sts["tls_rpt"] else "WARN",
+            "present" if sts["tls_rpt"] else "absent",
+            hardening=True)
 
 
 # ---------------------------------------------------------------- grading
