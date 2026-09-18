@@ -883,17 +883,34 @@ def _security(rep: Report, d: str):
                 "Could not complete open-resolver test", "")
 
 
-def grade(rep: Report) -> dict:
-    """Per-section band + overall. Overall is worst-weighted, not averaged."""
+def grade(rep: Report, strict: bool = False) -> dict:
+    """Per-section band + overall. Overall is worst-weighted, not averaged.
+
+    ``strict``: pre-production audit mode. WARN findings are promoted to
+    FAIL for both severity scoring and `has_fail` detection. Classification
+    (hardening vs correctness) is unaffected — strict tightens the grade,
+    it does not reclassify findings. UNKNOWN is still UNKNOWN.
+    """
+    # In strict mode, a WARN counts as a FAIL for scoring purposes. We keep
+    # `f.status` untouched (the finding text still reads "WARN" in the UI)
+    # and only remap the score/has_fail contributions.
+    def _score(f):
+        if strict and f.status == "WARN":
+            return SEVERITY_SCORE["FAIL"]
+        return SEVERITY_SCORE[f.status]
+
+    def _is_failing(f):
+        return f.status == "FAIL" or (strict and f.status == "WARN")
+
     out = {}
     for sec in SECTIONS:
         scored = [f for f in rep.section(sec) if f.is_scored]
         if not scored:
             out[sec] = ("—", None)
             continue
-        pts = sum(SEVERITY_SCORE[f.status] for f in scored)
+        pts = sum(_score(f) for f in scored)
         pct = pts / (2 * len(scored))
-        has_fail = any(f.status == "FAIL" for f in scored)
+        has_fail = any(_is_failing(f) for f in scored)
         band = _band(pct, has_fail)
         out[sec] = (band, pct)
 
@@ -930,16 +947,19 @@ def grade(rep: Report) -> dict:
     def _grade_set(findings):
         if not findings:
             return "—"
-        pts = sum(SEVERITY_SCORE[f.status] for f in findings)
+        pts = sum(_score(f) for f in findings)
         pct = pts / (2 * len(findings))
-        has_fail = any(f.status == "FAIL" for f in findings)
+        has_fail = any(_is_failing(f) for f in findings)
         return _band(pct, has_fail)
 
     correctness_grade = _grade_set(correctness_findings)
     hardening_scored = [f for f in rep.findings if f.hardening and f.is_scored]
-    hardening_pts = sum(2 if f.status == "PASS" else (1 if f.status == "WARN" else 0)
-                        for f in hardening_scored)
+    hardening_pts = sum(_score(f) for f in hardening_scored)
     hardening_total = len(hardening_scored)
+    # Hardening bucket is graded as a pure adoption ratio (has_fail=False) so
+    # a single un-adopted hardening feature doesn't trip the has_fail-driven
+    # D/F floor — google.com's 6/7 adoption should stay at B, not fall to D.
+    # Strict mode still tightens via _score() promoting WARN→FAIL point values.
     hardening_grade = (_band(hardening_pts / (2 * hardening_total), False)
                        if hardening_total else "—")
 

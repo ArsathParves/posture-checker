@@ -44,12 +44,12 @@ REMEDIATION = {
 }
 
 
-def render(rep, show_info=True, as_json=False):
+def render(rep, show_info=True, as_json=False, strict=False):
     if as_json:
         payload = {
             "domain": rep.domain, "punycode": rep.punycode,
             "checked_at": datetime.fromtimestamp(rep.checked_at, timezone.utc).isoformat(),
-            "grades": grade(rep),
+            "grades": grade(rep, strict=strict),
             "degraded_modules": rep.degraded,
             "findings": [f.__dict__ for f in rep.findings],
             "data": _jsonable(rep.data),
@@ -57,7 +57,7 @@ def render(rep, show_info=True, as_json=False):
         print(json.dumps(payload, indent=2, default=str))
         return
 
-    g = grade(rep)
+    g = grade(rep, strict=strict)
     ts = datetime.fromtimestamp(rep.checked_at, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     # ---- header
@@ -148,7 +148,7 @@ def _jsonable(d):
         return {k: str(v) for k, v in d.items()}
 
 
-def main(argv=None):
+def _build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="posture", description="VergeCloud domain posture checker (CLI prototype)")
     ap.add_argument("domain", help="domain to check, e.g. example.com")
@@ -158,6 +158,13 @@ def main(argv=None):
                     help="additional DKIM selector to probe (repeatable)")
     ap.add_argument("--skip-asn", action="store_true",
                     help="skip IP-RDAP/ASN operator lookups (faster)")
+    ap.add_argument("--strict", action="store_true",
+                    help="pre-production audit mode: WARN findings are graded as FAIL")
+    return ap
+
+
+def main(argv=None):
+    ap = _build_parser()
     args = ap.parse_args(argv)
 
     try:
@@ -169,7 +176,7 @@ def main(argv=None):
         console.print(f"[bold red]Unexpected failure:[/] {type(e).__name__}: {e}")
         return 1
 
-    render(rep, show_info=not args.no_info, as_json=args.json)
+    render(rep, show_info=not args.no_info, as_json=args.json, strict=args.strict)
     return 0
 
 
