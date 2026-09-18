@@ -324,10 +324,17 @@ def dnssec_status(domain: str) -> dict:
     name = dns.name.from_text(domain)
 
     # --- DS at parent -------------------------------------------------
+    # L4: we need to know whether the DS query *reached* a resolver at all.
+    # A "no DS in answer section" is only meaningful if the resolver replied.
+    # If every probe raises (UDP/53 blackholed, iptables, etc.) we must not
+    # infer "the zone has no DS" — that would collapse `unretrievable` into
+    # `not_configured`, a rule-1 violation on the tool's highest-stakes finding.
     ds_rrset = None
+    ds_probe_responded = False
     try:
         q = dns.message.make_query(name, dns.rdatatype.DS, want_dnssec=True)
         resp = dns.query.udp(q, PUBLIC_RESOLVERS[0], timeout=TIMEOUT)
+        ds_probe_responded = True
         ds_rrset = next((r for r in resp.answer if r.rdtype == dns.rdatatype.DS), None)
     except Exception as e:
         out["notes"].append(f"DS query failed: {type(e).__name__}")
@@ -336,12 +343,16 @@ def dnssec_status(domain: str) -> dict:
         out["ds_records"] = [r.to_text() for r in ds_rrset]
 
     # --- DNSKEY + RRSIG at child --------------------------------------
+    # L4: same reasoning — record whether *any* DNSKEY probe reached
+    # a resolver. All-fail means "we don't know", not "zone unsigned".
     dnskey_rrset = None
     rrsig_rrset = None
+    dnskey_probe_responded = False
     for resolver_ip in PUBLIC_RESOLVERS:
         try:
             q = dns.message.make_query(name, dns.rdatatype.DNSKEY, want_dnssec=True)
             resp = dns.query.udp(q, resolver_ip, timeout=TIMEOUT)
+            dnskey_probe_responded = True
             dnskey_rrset = next((r for r in resp.answer if r.rdtype == dns.rdatatype.DNSKEY), None)
             rrsig_rrset = next((r for r in resp.answer if r.rdtype == dns.rdatatype.RRSIG), None)
             if dnskey_rrset:
@@ -424,6 +435,23 @@ def dnssec_status(domain: str) -> dict:
         out["validated"] = False
 
     # --- state machine ------------------------------------------------
+    # L4 gate: if either probe couldn't reach a resolver, we have no basis
+    # for claiming the zone is unsigned. `not_configured` requires positive
+    # evidence (a resolver replied "no records") on both DS and DNSKEY.
+    if not ds_probe_responded and not dnskey_probe_responded:
+        out["state"] = "unknown"
+        out["notes"].append(
+            "DS and DNSKEY probes unretrievable — UDP/53 may be blocked "
+            "or every public resolver was unreachable"
+        )
+        return out
+    if not ds_probe_responded and not out["dnskey"]:
+        out["state"] = "unknown"
+        out["notes"].append(
+            "DS probe unretrievable — cannot claim zone is unsigned "
+            "without a parent-side answer"
+        )
+        return out
     if not out["ds"] and not out["dnskey"]:
         out["state"] = "not_configured"
     elif out["validated"] is True:
