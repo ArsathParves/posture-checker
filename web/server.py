@@ -308,3 +308,12 @@ if _STATIC.exists():
     @app.get("/")
     async def index():
         return FileResponse(str(_STATIC / "index.html"))
+
+
+def main():
+    """Console-script entry point (`posture-web`). Cross-platform: uses
+    plain uvicorn.run so it works on Windows too — no reliance on the
+    shell wrapper or on uvloop from `uvicorn[standard]`."""
+    import uvicorn
+
+    uvicorn.run("web.server:app", host="127.0.0.1", port=8000)
