@@ -21,6 +21,14 @@ const footerEl = document.getElementById("footer");
 
 let currentSource = null;
 
+// Fixed set of finding statuses the server can emit. Any value outside
+// this set is coerced to "INFO" before use — status flows into a CSS
+// class attribute, so an unconstrained value is an XSS vector.
+const STATUS_CLASSES = new Set(["PASS", "WARN", "FAIL", "INFO"]);
+function safeStatus(s) {
+  return STATUS_CLASSES.has(s) ? s : "INFO";
+}
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const domain = domainInput.value.trim();
@@ -151,8 +159,9 @@ function renderSection(name, findings, elapsedMs) {
   for (const f of shown) {
     const row = document.createElement("div");
     row.className = "finding";
+    const badgeCls = safeStatus(f.status);
     row.innerHTML = `
-      <span class="badge ${f.status}">${f.status}</span>
+      <span class="badge ${badgeCls}">${badgeCls}</span>
       <span class="label">${escapeHtml(f.label)}</span>
       <span class="detail">${escapeHtml(f.detail || "")}${
         f.why ? `<span class="why">${escapeHtml(f.why)}</span>` : ""
