@@ -59,19 +59,24 @@ class TestDNSSECADBitFallback:
                 "Should note that AD-bit check was inconclusive"
 
     def test_ad_bit_detects_servfail(self):
-        """Test that SERVFAIL response is detected correctly."""
+        """SERVFAIL from the AD-bit probe must land as ad_authenticated=False,
+        with a note explaining a validating resolver rejected the zone."""
+        import dns.rcode
+
         def mock_udp(q, ip, timeout=None):
             resp = MagicMock()
-            resp.rcode.return_value = 1  # SERVFAIL
+            # dnssec_status compares resp.rcode() against dns.rcode.SERVFAIL,
+            # which is the Rcode enum (value=2). Return the enum, not int 1.
+            resp.rcode.return_value = dns.rcode.SERVFAIL
             resp.flags = 0
             resp.answer = []
             return resp
 
         with patch('posture.dnsmod.dns.query.udp', side_effect=mock_udp):
-            result = dnssec_status("dnssec-failed.org")  # Known broken DNSSEC
+            result = dnssec_status("dnssec-failed.org")
 
-            # SERVFAIL should be detected as false (not authenticated)
-            assert result["ad_authenticated"] is False, "SERVFAIL should result in ad_authenticated=False"
+            assert result["ad_authenticated"] is False, \
+                "SERVFAIL should result in ad_authenticated=False"
             assert any("SERVFAIL" in note for note in result["notes"]), \
                 "Should note SERVFAIL in the result"
 
