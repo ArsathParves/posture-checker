@@ -274,11 +274,10 @@ def evaluate_dmarc(domain: str) -> dict:
 
 def evaluate_mta_sts(domain: str) -> dict:
     try:
-        _probe = _txt_records(f"_mta-sts.{domain}")
+        sts_records = _txt_records(f"_mta-sts.{domain}")
     except TxtUnretrievable:
         return {"mta_sts": None, "tls_rpt": None, "unretrievable": True}
-    txts = [t for t in _txt_records(f"_mta-sts.{domain}")
-            if t.lower().startswith("v=stsv1")]
+    txts = [t for t in sts_records if t.lower().startswith("v=stsv1")]
     tlsrpt = [t for t in _txt_records(f"_smtp._tls.{domain}")
               if t.lower().startswith("v=tlsrptv1")]
     return {"mta_sts": bool(txts), "tls_rpt": bool(tlsrpt)}
