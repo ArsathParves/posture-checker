@@ -32,9 +32,16 @@ COMMON_SELECTORS = [
 def _txt_records(domain: str) -> list[str]:
     res = query(domain, "TXT")
     if not res.get("ok"):
-        if res.get("error") == "TRUNCATED_NO_TCP":
-            raise TxtUnretrievable(res.get("note", "TXT lookup truncated"))
-        return []
+        error = res.get("error") or "UNKNOWN"
+        # NXDOMAIN is the one legitimate absence signal — the domain
+        # does not exist, so the record cannot exist either. Everything
+        # else (SERVFAIL, TIMEOUT, TRUNCATED_NO_TCP, generic transport
+        # exceptions) means the answer was unobtainable, NOT confirmed
+        # absent, and MUST raise so downstream (SPF/DMARC/MTA-STS/TLS-
+        # RPT/DKIM) doesn't collapse "unretrievable" into "broken".
+        if error == "NXDOMAIN":
+            return []
+        raise TxtUnretrievable(f"{error}: {res.get('note') or error}")
     out = []
     for r in res.get("records", []):
         # dnspython quotes TXT chunks; join split strings
