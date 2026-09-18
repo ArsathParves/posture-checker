@@ -76,6 +76,50 @@ class TestIdn:
         assert any("punycode" in n.lower() for n in notes)
 
 
+class TestBidiIdn:
+    """E2 — Bidirectional IDN (Arabic/Hebrew labels).
+
+    Homograph safety requires that RTL labels round-trip cleanly through
+    the punycode pipeline. If any encoding step silently mangles a script
+    with strong-right characters, the display form and puny form drift
+    apart and downstream findings render one thing while querying
+    another. Pin the round-trip for a handful of RTL scripts."""
+
+    def test_arabic_label_round_trips(self):
+        """Arabic label under an ASCII TLD must produce an xn-- puny form
+        distinct from the display form. Ground truth verified with the
+        `idna` codec: 'يمن' → xn--hhbck."""
+        display, puny, notes = normalize_domain("يمن.ye")
+        assert display == "يمن.ye"
+        assert puny == "xn--hhbck.ye"
+        assert display != puny
+        assert any("punycode" in n.lower() for n in notes)
+
+    def test_arabic_label_and_arabic_tld(self):
+        """Both label and TLD in Arabic — every dot-separated segment
+        must be encoded independently, none silently dropped."""
+        display, puny, _ = normalize_domain("مثال.إختبار")
+        assert display == "مثال.إختبار"
+        # Two xn-- segments, one per label. This shape guards against
+        # the codec eating the TLD or joining the labels.
+        assert puny.count("xn--") == 2
+        assert "." in puny
+
+    def test_hebrew_label_under_ascii_tld(self):
+        """Hebrew (also RTL) under .co.il — three-label form must not
+        confuse the puny encoder."""
+        display, puny, _ = normalize_domain("ישראל.co.il")
+        assert display == "ישראל.co.il"
+        assert puny.startswith("xn--") and puny.endswith(".co.il")
+
+    def test_bidi_puny_is_ascii_only(self):
+        """The puny form is the string that hits DNS. It MUST be ASCII —
+        any non-ASCII byte leaking through would fail the wire encoding
+        and defeat the homograph guard the puny form exists to provide."""
+        _, puny, _ = normalize_domain("טעסט.co.il")
+        assert puny.isascii(), f"puny form must be ASCII, got {puny!r}"
+
+
 class TestObviousGarbage:
     """No dot means not a domain."""
 
