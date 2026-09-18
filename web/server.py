@@ -20,6 +20,7 @@ import asyncio
 import json
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -71,7 +72,42 @@ class Job:
 # Job store: check_id -> Job. In-memory only, per POC scope.
 JOBS: dict[str, Job] = {}
 # domain -> (finished_job, expires_at). Used to skip re-runs.
-RESULT_CACHE: dict[str, tuple[Job, float]] = {}
+# F4/P6: LRU-bounded so a long-running deployment scanning many
+# distinct domains cannot grow this dict without limit. TTL still
+# governs freshness; the cap governs size.
+_RESULT_CACHE_MAX = 512
+RESULT_CACHE: "OrderedDict[str, tuple[Job, float]]" = OrderedDict()
+
+
+def _cache_result(job: Job, expires_at: float) -> None:
+    """Store a finished job under its domain with LRU eviction.
+
+    Overwrites any prior entry for the same domain (moves it to the
+    most-recently-used slot). When the cache is at capacity, evicts the
+    least-recently-used entry before inserting.
+    """
+    if job.domain in RESULT_CACHE:
+        RESULT_CACHE.move_to_end(job.domain)
+    RESULT_CACHE[job.domain] = (job, expires_at)
+    while len(RESULT_CACHE) > _RESULT_CACHE_MAX:
+        RESULT_CACHE.popitem(last=False)
+
+
+def _cache_get(domain: str) -> Job | None:
+    """Return a fresh cached job for `domain`, or None if absent/expired.
+
+    A hit refreshes recency (move_to_end) so an actively-requested domain
+    survives eviction pressure. An expired entry is dropped in-place.
+    """
+    entry = RESULT_CACHE.get(domain)
+    if entry is None:
+        return None
+    job, expires_at = entry
+    if expires_at <= time.time():
+        RESULT_CACHE.pop(domain, None)
+        return None
+    RESULT_CACHE.move_to_end(domain)
+    return job
 # Bound concurrency so a bulk-scan attempt can't exhaust threads
 CHECK_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_CHECKS)
 
@@ -332,7 +368,7 @@ async def _run_job(job: Job):
 
             # Cache successful runs by punycode domain for repeat visitors.
             if not job.error:
-                RESULT_CACHE[job.domain] = (job, time.time() + CACHE_TTL_SECONDS)
+                _cache_result(job, time.time() + CACHE_TTL_SECONDS)
 
             # Schedule GC of the job itself (only if loop is still running)
             try:
@@ -374,9 +410,8 @@ async def create_check(request: Request, body: CheckRequest):
     domain = _validate_domain(body.domain)
 
     # Cache hit? Return the existing check_id — SSE will replay events.
-    cached = RESULT_CACHE.get(domain)
-    if cached and cached[1] > time.time():
-        prior = cached[0]
+    prior = _cache_get(domain)
+    if prior is not None:
         complete = next((e for e in prior.events
                          if e.get("event") == "complete"), None)
         return {"check_id": prior.check_id, "cached": True,
