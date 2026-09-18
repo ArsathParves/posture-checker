@@ -262,11 +262,18 @@ def evaluate_dmarc(domain: str) -> dict:
     policy = tags.get("p", "none").lower()
     strength = {"reject": "strong", "quarantine": "moderate", "none": "weak"}.get(
         policy, "unknown")
+    # E5: RFC 7489 §6.6.3 — if more than one v=DMARC1 record is present,
+    # receivers apply NO DMARC-based decision. Silently picking txts[0]
+    # (v0.5 behaviour) reports a policy that validators are ignoring.
+    # Surface `multiple` + `all_records` so the emit layer can FAIL and
+    # enumerate the offending records.
     return {
         "present": True, "record": rec, "policy": policy, "strength": strength,
         "subdomain_policy": tags.get("sp"), "pct": tags.get("pct", "100"),
         "rua": tags.get("rua"), "ruf": tags.get("ruf"),
         "alignment_dkim": tags.get("adkim", "r"), "alignment_spf": tags.get("aspf", "r"),
+        "multiple": len(txts) > 1,
+        "all_records": txts if len(txts) > 1 else None,
     }
 
 

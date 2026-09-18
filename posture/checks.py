@@ -755,6 +755,17 @@ def _email(rep: Report, d: str, dkim_selectors):
                "Domain has no MX record; DMARC still recommended if mail is sent from "
                "any service using this domain.")
         rep.add(S, "DMARC", sev, "No DMARC record", why)
+    elif dmarc.get("multiple"):
+        # E5: RFC 7489 §6.6.3 — with >1 v=DMARC1 record, receivers apply
+        # no DMARC decision. This is a real FAIL: a domain with two
+        # DMARC records has effectively no DMARC policy in force, even
+        # if each record on its own says p=reject.
+        records = dmarc.get("all_records") or []
+        rep.add(S, "DMARC", "FAIL",
+                f"Multiple DMARC records published ({len(records)})",
+                "RFC 7489 §6.6.3: with more than one v=DMARC1 record at "
+                "_dmarc.<domain>, receivers apply no DMARC-based decision. "
+                "Consolidate to a single record.")
     else:
         strength = dmarc["strength"]
         status = {"strong": "PASS", "moderate": "WARN", "weak": "FAIL"}.get(strength, "WARN")
