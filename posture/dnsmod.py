@@ -15,6 +15,10 @@ import dns.rdatatype
 import dns.resolver
 
 TIMEOUT = 5.0
+# AXFR runs over TCP and streams the full zone; a 5s cap that suits single
+# record lookups is too short for a slow secondary link and produces
+# false-alarm UNKNOWNs. Keep AXFR patience separately tunable.
+AXFR_TIMEOUT = 10.0
 PUBLIC_RESOLVERS = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]
 
 
@@ -483,7 +487,7 @@ def axfr_open_check(domain: str, ns_map: dict) -> dict:
             results[host] = {"tested": False, "reason": "no A record"}
             continue
         try:
-            xfr = dns.query.xfr(ip, domain, timeout=TIMEOUT, lifetime=TIMEOUT * 2)
+            xfr = dns.query.xfr(ip, domain, timeout=AXFR_TIMEOUT, lifetime=AXFR_TIMEOUT * 2)
             z = dns.zone.from_xfr(xfr)
             n = len(z.nodes)
             results[host] = {"tested": True, "open": True, "records_leaked": n}
@@ -492,8 +496,14 @@ def axfr_open_check(domain: str, ns_map: dict) -> dict:
             results[host] = {"tested": True, "open": False, "reason": "refused"}
         except (ConnectionResetError, EOFError):
             results[host] = {"tested": True, "open": False, "reason": "refused/reset"}
+        except dns.exception.Timeout:
+            # Slow link or peer that accepted the TCP connect but did not
+            # answer within the budget. Distinct from a hard "port blocked"
+            # failure so the downstream finding can be specific.
+            results[host] = {"tested": False, "reason": "timeout",
+                             "timeout_s": AXFR_TIMEOUT}
         except Exception as e:
-            # Timeout on TCP/53 (blocked path) or other transient failure --
+            # TCP/53 blocked, refused connection, or another transient failure --
             # cannot conclude either way.
             results[host] = {"tested": False, "reason": type(e).__name__}
     return {"any_open": any_open, "per_ns": results}

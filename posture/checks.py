@@ -787,8 +787,21 @@ def _security(rep: Report, d: str):
         rep.add(S, "Zone transfer (AXFR)", "PASS",
                 f"Refused by all {len(tested)} tested nameserver(s)")
     else:
-        rep.add(S, "Zone transfer (AXFR)", "UNKNOWN",
-                "Could not complete AXFR test (TCP/53 may be blocked on this path)",
+        reasons = [r.get("reason") for r in axfr["per_ns"].values() if r.get("reason")]
+        timed_out = [r for r in reasons if r == "timeout"]
+        if timed_out and len(timed_out) == len(reasons):
+            detail = (f"AXFR test timeout on all {len(timed_out)} nameserver(s) "
+                      f"after {dnsmod.AXFR_TIMEOUT}s — slow link or unresponsive TCP/53")
+        elif timed_out:
+            detail = (f"Could not complete AXFR test — {len(timed_out)} of "
+                      f"{len(reasons)} nameserver(s) hit timeout after "
+                      f"{dnsmod.AXFR_TIMEOUT}s; others failed with: "
+                      + ", ".join(sorted(set(r for r in reasons if r != "timeout"))))
+        else:
+            detail = ("Could not complete AXFR test (TCP/53 may be blocked on this path) "
+                      "— reasons: " + ", ".join(sorted(set(reasons)))) if reasons else \
+                     "Could not complete AXFR test (TCP/53 may be blocked on this path)"
+        rep.add(S, "Zone transfer (AXFR)", "UNKNOWN", detail,
                 "Zone-transfer exposure could not be determined.")
 
     # --- open recursive resolver --------------------------------------
