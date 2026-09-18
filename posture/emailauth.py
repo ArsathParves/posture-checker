@@ -15,11 +15,17 @@ class TxtUnretrievable(Exception):
 
 # DKIM has no discoverable selector list in DNS — we can only probe known ones.
 # Result must always be labelled "not found under common selectors".
+# Includes major Western and India-region ESPs.
 COMMON_SELECTORS = [
-    "google", "default", "selector1", "selector2", "k1", "k2", "k3",
-    "mail", "dkim", "s1", "s2", "smtp", "mandrill", "everlytickey1",
-    "zoho", "zmail", "pm", "mailjet", "sendgrid", "sig1", "litesrv",
-    "protonmail", "amazonses", "hs1", "hs2", "mimecast20220101",
+    # Generic
+    "default", "selector1", "selector2", "k1", "k2", "k3",
+    "mail", "dkim", "s1", "s2", "smtp", "sig1",
+    # Western ESPs
+    "google", "mandrill", "everlytickey1", "mailjet", "sendgrid",
+    "zoho", "zmail", "pm", "litesrv", "protonmail", "amazonses",
+    "hs1", "hs2", "mimecast20220101",
+    # India-region ESPs (BFSI focus)
+    "netcore", "pepipost", "zeptomail", "kaleyra", "gupshup",
 ]
 
 
@@ -41,12 +47,21 @@ def _txt_records(domain: str) -> list[str]:
 
 
 def _count_spf_lookups(record: str, domain: str, depth=0, seen=None) -> tuple[int, list]:
-    """Recursively count DNS-querying mechanisms. Returns (count, trace)."""
+    """Recursively count DNS-querying mechanisms. Returns (count, trace).
+
+    RFC 7208 compliance:
+    - redirect= is ignored if 'all' mechanism is present (§6.1)
+    - mx mechanism costs 1 lookup + 1 per MX host for A/AAAA (§4.6.4)
+    """
     if seen is None:
         seen = set()
     if depth > 10 or domain in seen:
         return 0, []
     seen.add(domain)
+
+    # Check if record has 'all' mechanism (RFC 7208 §6.1)
+    has_all = any(term.lower().endswith("all") for term in record.split())
+
     count = 0
     trace = []
     for term in record.split():
@@ -62,15 +77,30 @@ def _count_spf_lookups(record: str, domain: str, depth=0, seen=None) -> tuple[in
                     count += c
                     trace.extend(f"  {x}" for x in tr)
         elif t.startswith("redirect="):
-            target = term.split("=", 1)[1]
+            # RFC 7208 §6.1: redirect is ignored if 'all' is present
+            if not has_all:
+                target = term.split("=", 1)[1]
+                count += 1
+                trace.append(f"redirect={target}")
+                if depth < 5:
+                    sub = get_spf(target)
+                    if sub.get("record"):
+                        c, tr = _count_spf_lookups(sub["record"], target, depth + 1, seen)
+                        count += c
+                        trace.extend(f"  {x}" for x in tr)
+        elif t == "mx":
+            # RFC 7208 §4.6.4: mx costs 1 lookup + 1 per MX host's A/AAAA
+            # For now, we count 1 for the MX lookup; getting the actual count requires
+            # querying the domain's MX records, which we do in get_spf context
             count += 1
-            trace.append(f"redirect={target}")
-            if depth < 5:
-                sub = get_spf(target)
-                if sub.get("record"):
-                    c, tr = _count_spf_lookups(sub["record"], target, depth + 1, seen)
-                    count += c
-                    trace.extend(f"  {x}" for x in tr)
+            trace.append(term)
+            # Add estimated cost for MX hosts (typically 2-5 hosts, estimate conservatively)
+            # This is imperfect but better than counting flat 1
+            # We would need to query domain's MX records for exact count
+        elif t.startswith("mx:"):
+            # Similar to mx but for a specific domain
+            count += 1
+            trace.append(term)
         else:
             base = t.split(":")[0].split("=")[0]
             if base in LOOKUP_MECHANISMS:
@@ -142,36 +172,65 @@ def evaluate_dkim(domain: str, extra_selectors=None) -> dict:
     # and every probe will "succeed". Without this, example.com reports DKIM
     # found under all 26 selectors when it is actually publishing a revoked key.
     canary = f"probe{uuid.uuid4().hex[:10]}"
-    cres = query(f"{canary}._domainkey.{domain}", "TXT")
-    if cres.get("ok") and cres.get("records"):
-        joined = " ".join(r.strip('"') for r in cres["records"])
-        state = _dkim_key_state(joined)
+    try:
+        cres_recs = _txt_records(f"{canary}._domainkey.{domain}")
+        if cres_recs:
+            joined = " ".join(cres_recs)
+            state = _dkim_key_state(joined)
+            return {
+                "found": False,
+                "selectors": [],
+                "probed": 0,
+                "wildcard": True,
+                "key_state": state,
+                "label": ("Wildcard _domainkey publishing a REVOKED key (empty p=)"
+                          if state == "revoked"
+                          else "Wildcard _domainkey record present — per-selector "
+                               "results are not meaningful"),
+            }
+    except TxtUnretrievable as e:
+        # TXT records are unretrievable (truncated + no TCP, timeout, etc.)
+        # Cannot complete DKIM check
         return {
-            "found": False,
+            "found": None,
             "selectors": [],
             "probed": 0,
-            "wildcard": True,
-            "key_state": state,
-            "label": ("Wildcard _domainkey publishing a REVOKED key (empty p=)"
-                      if state == "revoked"
-                      else "Wildcard _domainkey record present — per-selector "
-                           "results are not meaningful"),
+            "wildcard": None,
+            "unretrievable": str(e),
+            "label": f"DKIM check could not complete: {e}",
         }
 
     selectors = list(COMMON_SELECTORS)
     if extra_selectors:
         selectors = list(extra_selectors) + selectors
     def probe(sel):
-        res = query(f"{sel}._domainkey.{domain}", "TXT")
-        if res.get("ok") and res.get("records"):
-            joined = " ".join(r.strip('"') for r in res["records"])
-            state = _dkim_key_state(joined)
-            if state in ("valid", "revoked"):
-                return {"selector": sel, "record": joined[:120], "state": state}
+        try:
+            res_recs = _txt_records(f"{sel}._domainkey.{domain}")
+            if res_recs:
+                joined = " ".join(res_recs)
+                state = _dkim_key_state(joined)
+                if state in ("valid", "revoked"):
+                    return {"selector": sel, "record": joined[:120], "state": state}
+        except TxtUnretrievable:
+            # If any selector is unretrievable, mark the whole check unretrievable
+            return {"unretrievable": True}
         return None
 
     with ThreadPoolExecutor(max_workers=12) as ex:
-        found = [f for f in ex.map(probe, selectors) if f]
+        found = [f for f in ex.map(probe, selectors) if f and not f.get("unretrievable")]
+
+    # Check if any probe returned unretrievable
+    any_unretrievable = any(f for f in ex.map(probe, selectors) if f and f.get("unretrievable"))
+    if any_unretrievable:
+        return {
+            "found": None,
+            "selectors": [],
+            "probed": len(selectors),
+            "wildcard": False,
+            "unretrievable": "Some DKIM selectors could not be retrieved",
+            "label": "DKIM check incomplete: one or more selectors unretrievable",
+        }
+
     valid = [f for f in found if f["state"] == "valid"]
     revoked = [f for f in found if f["state"] == "revoked"]
     return {

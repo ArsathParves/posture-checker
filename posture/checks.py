@@ -53,13 +53,24 @@ def run(domain_input: str, dkim_selectors=None, skip_asn=False) -> Report:
                 "Domain not found — check spelling or confirm it is registered.")
         return rep
 
-    _registration(rep, d)
-    ns_map = _nameservers(rep, d, skip_asn=skip_asn)
-    _soa(rep, d, ns_map)
-    _records(rep, d)
-    _dnssec(rep, d)
-    _email(rep, d, dkim_selectors)
-    _security(rep, d)
+    # ---- section steps with consistent exception handling ---
+    section_steps = [
+        ("Registration & delegation", lambda: _registration(rep, d)),
+        ("Nameserver posture",        lambda: _nameservers(rep, d, skip_asn=skip_asn)),
+        ("SOA & zone hygiene",        lambda: _soa(rep, d, rep.data.get("ns_map", {}))),
+        ("Core records",              lambda: _records(rep, d)),
+        ("DNSSEC",                    lambda: _dnssec(rep, d)),
+        ("Email authentication",      lambda: _email(rep, d, dkim_selectors)),
+        ("Security posture",          lambda: _security(rep, d)),
+    ]
+    for name, fn in section_steps:
+        try:
+            fn()
+        except Exception as e:
+            rep.add(name, "Section error", "UNKNOWN",
+                    f"{type(e).__name__}: {e}",
+                    "This section failed to complete. Result is incomplete.")
+            rep.degraded.append(name)
     return rep
 
 
@@ -407,6 +418,8 @@ def _soa(rep: Report, d: str, ns_map: dict):
     # fronting; large operators (Google, Cloudflare, AWS) legitimately run
     # short refresh/expire/TTL values. Ranges widened to reflect current
     # practice, and low-value warnings suppressed for anycast/CDN operators.
+    # NOTE: ns_owners is populated by _nameservers() and must run first.
+    # If missing (e.g., _nameservers failed), we conservatively apply standard ranges.
     ns_owners_blob = " ".join(str(v).lower()
                               for v in (rep.data.get("ns_owners") or {}).values())
     big_operator = any(k in ns_owners_blob for k in LARGE_ANYCAST_OPERATORS)
@@ -629,7 +642,12 @@ def _email(rep: Report, d: str, dkim_selectors):
 
     dkim = emailauth.evaluate_dkim(d, dkim_selectors)
     rep.data["dkim"] = dkim
-    if dkim.get("wildcard"):
+    if dkim.get("unretrievable"):
+        # TXT records were unretrievable (truncated + no TCP, timeout, etc.)
+        rep.add(S, "DKIM", "UNKNOWN",
+                dkim.get("label", "DKIM check could not complete"),
+                dkim.get("unretrievable", "TXT records were unretrievable"))
+    elif dkim.get("wildcard"):
         state = dkim.get("key_state")
         rep.add(S, "DKIM", "FAIL" if state == "revoked" else "UNKNOWN",
                 dkim["label"],
@@ -784,22 +802,37 @@ def grade(rep: Report) -> dict:
     #   - hardening_grade:   optional-feature adoption
     # The headline "overall" now tracks correctness; hardening is reported
     # alongside so a visitor sees both without one masking the other.
+    # HARDENING_ABSENCE: features that are optional/improving but not critical.
+    # These findings should not penalize correctness grade; they affect hardening grade only.
+    # Criteria: "not configured" or "weakly configured", not "broken".
+    # Examples:
+    #   - DNSSEC: unsigned is OK (not_configured); broken is not OK.
+    #   - AAAA: absent is OK; pointing to wrong address is not OK.
+    #   - SPF qualifier: weak ~all is OK (not broken); redirected absent is not OK.
+    #   - MTA-STS: absent is OK; misconfigured is not OK.
     HARDENING_ABSENCE = {
-        # (label): these are "feature not adopted", not "broken"
         "DNSSEC status",            # only when state == not_configured
-        "CAA record",
-        "MTA-STS", "TLS-RPT",
-        "AAAA record (IPv6)", "IPv6 (AAAA) on nameservers",
-        "SPF 'all' qualifier",      # ~all is weak, not broken
-        "DMARC reporting",
+        "CAA record",               # absent CAA is optional
+        "MTA-STS", "TLS-RPT",       # optional hardening for mail
+        "AAAA record (IPv6)", "IPv6 (AAAA) on nameservers",  # optional but increasingly expected
+        "DMARC reporting",          # optional reporting endpoint
+        # Note: "SPF 'all' qualifier" removed because weak ~all is presence not absence.
+        # If SPF exists with ~all: partial protection (correctness OK, hardening weak)
+        # If SPF absent: no protection (correctness failure). These should not be grouped.
     }
 
     def is_hardening_absence(f):
         if f.label not in HARDENING_ABSENCE:
             return False
         # DNSSEC "broken" is a real misconfig; only "not configured" is absence
+        # Exception: if the section failed to run (report is degraded), treat DNSSEC
+        # issues as hardening absence, not correctness failure
         if f.label == "DNSSEC status":
-            return rep.data.get("dnssec", {}).get("state") == "not_configured"
+            dnssec_data = rep.data.get("dnssec")
+            if dnssec_data is None:
+                # Section failed; don't penalize correctness
+                return True
+            return dnssec_data.get("state") == "not_configured"
         return f.status in ("WARN", "FAIL")
 
     correctness_findings = [f for f in rep.findings

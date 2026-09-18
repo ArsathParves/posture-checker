@@ -197,4 +197,11 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g,
     c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
-function cssEscape(s) { return s.replace(/"/g, '\\"'); }
+function cssEscape(s) {
+  // Use CSS.escape() for proper escaping, or fallback to manual escape
+  if (typeof CSS !== 'undefined' && CSS.escape) {
+    return CSS.escape(s);
+  }
+  // Fallback: escape special characters for CSS identifiers
+  return String(s).replace(/[!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~]/g, '\\$&');
+}

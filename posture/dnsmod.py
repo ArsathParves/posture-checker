@@ -33,12 +33,19 @@ _qcache: dict = {}
 
 
 def query(domain: str, rdtype: str, nameservers=None) -> dict:
-    """Single record query. Never raises — returns a status dict. Memoised."""
+    """Single record query. Never raises — returns a status dict. Memoised with TTL awareness."""
     key = (domain.lower(), rdtype, tuple(nameservers) if nameservers else None)
     if key in _qcache:
-        return _qcache[key]
+        res, expiry = _qcache[key]
+        if time.time() < expiry:
+            return res
+        else:
+            # Cache entry expired, remove it
+            del _qcache[key]
     res = _query_uncached(domain, rdtype, nameservers)
-    _qcache[key] = res
+    # Cache for TTL duration; default to 300s if TTL not available
+    ttl = res.get("ttl", 300) if res.get("ok") else 60  # Shorter TTL for errors
+    _qcache[key] = (res, time.time() + ttl)
     return res
 
 
@@ -154,11 +161,28 @@ def parent_delegation(domain: str) -> dict:
         parent_ns_res = query(parent, "NS")
         if not parent_ns_res.get("ok") or not parent_ns_res.get("records"):
             return {"ok": False, "error": "parent_ns_lookup_failed"}
-        parent_ns_host = str(parent_ns_res["records"][0]).rstrip(".")
-        parent_ip_res = query(parent_ns_host, "A")
-        if not parent_ip_res.get("ok") or not parent_ip_res.get("records"):
+
+        # Try each parent NS until we find one with an A record (fallback to AAAA)
+        parent_ip = None
+        parent_ns_host = None
+        for ns_name in parent_ns_res["records"]:
+            ns_host = str(ns_name).rstrip(".")
+            # Try A record first (IPv4)
+            parent_ip_res = query(ns_host, "A")
+            if parent_ip_res.get("ok") and parent_ip_res.get("records"):
+                parent_ip = parent_ip_res["records"][0]
+                parent_ns_host = ns_host
+                break
+            # Fall back to AAAA (IPv6) if A lookup fails
+            parent_ipv6_res = query(ns_host, "AAAA")
+            if parent_ipv6_res.get("ok") and parent_ipv6_res.get("records"):
+                parent_ip = parent_ipv6_res["records"][0]
+                parent_ns_host = ns_host
+                break
+
+        if not parent_ip or not parent_ns_host:
             return {"ok": False, "error": "parent_ip_lookup_failed"}
-        parent_ip = parent_ip_res["records"][0]
+
         msg = dns.message.make_query(domain, "NS")
         resp = dns.query.udp(msg, parent_ip, timeout=TIMEOUT)
         ns = []
@@ -285,18 +309,26 @@ def dnssec_status(domain: str) -> dict:
                                  "— chain is broken at the delegation boundary")
 
     # --- (3) AD-bit confirmation from a validating resolver -----------
-    try:
-        q = dns.message.make_query(name, dns.rdatatype.A, want_dnssec=True)
-        # No CD bit: we want the resolver to validate and tell us via AD.
-        resp = dns.query.udp(q, "8.8.8.8", timeout=TIMEOUT)
-        if resp.rcode() == dns.rcode.SERVFAIL:
-            out["ad_authenticated"] = False
-            out["notes"].append("Validating resolver returned SERVFAIL — a real "
-                                 "validating resolver rejects this zone")
-        else:
-            out["ad_authenticated"] = bool(resp.flags & dns.flags.AD)
-    except Exception as e:
-        out["notes"].append(f"AD-bit check inconclusive: {type(e).__name__}")
+    # Retry through multiple resolvers; a single resolver failure shouldn't
+    # make the entire DNSSEC check inconclusive.
+    ad_checked = False
+    for resolver_ip in PUBLIC_RESOLVERS:
+        try:
+            q = dns.message.make_query(name, dns.rdatatype.A, want_dnssec=True)
+            # No CD bit: we want the resolver to validate and tell us via AD.
+            resp = dns.query.udp(q, resolver_ip, timeout=TIMEOUT)
+            ad_checked = True
+            if resp.rcode() == dns.rcode.SERVFAIL:
+                out["ad_authenticated"] = False
+                out["notes"].append("Validating resolver returned SERVFAIL — a real "
+                                     "validating resolver rejects this zone")
+            else:
+                out["ad_authenticated"] = bool(resp.flags & dns.flags.AD)
+            break  # Success, no need to retry
+        except Exception:
+            continue  # Try next resolver
+    if not ad_checked:
+        out["notes"].append("AD-bit check inconclusive: no validating resolver responded")
 
     # --- overall verdict ----------------------------------------------
     # Fully validated requires: self-signed AND DS matches AND (AD confirms OR

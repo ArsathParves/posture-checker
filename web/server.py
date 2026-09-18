@@ -57,6 +57,8 @@ class Job:
     events: list[dict] = field(default_factory=list)
     done: bool = False
     error: str | None = None
+    # Version counter incremented on each new event (prevents race on Event.clear())
+    _event_version: int = 0
     # asyncio Event used by SSE consumers to wait for new frames
     _wake: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -144,25 +146,38 @@ async def _run_job(job: Job):
                 if event is None:
                     break
                 job.events.append(event)
+                job._event_version += 1  # Increment version on new event
                 job._wake.set()
                 if event.get("event") in ("complete", "error", "nxdomain"):
                     # nxdomain already emits complete after itself; keep loop
                     if event["event"] == "complete":
                         break
+        except asyncio.CancelledError:
+            # Task was cancelled (e.g., server shutdown). Mark as cancelled, not failed.
+            job.error = "Check cancelled (server shutdown or timeout)"
+            job.events.append({"event": "error", "type": "server",
+                               "message": job.error})
+            job._event_version += 1
+            raise  # Re-raise so asyncio can handle cleanup
         except Exception as e:
             job.error = f"{type(e).__name__}: {e}"
             job.events.append({"event": "error", "type": "server",
                                "message": job.error})
+            job._event_version += 1
         finally:
             job.done = True
-            job._wake.set()
+            job._wake.set()  # Final notification
 
             # Cache successful runs by punycode domain for repeat visitors.
             if not job.error:
                 RESULT_CACHE[job.domain] = (job, time.time() + CACHE_TTL_SECONDS)
 
-            # Schedule GC of the job itself
-            loop.call_later(CHECK_JOB_TTL_SECONDS, JOBS.pop, job.check_id, None)
+            # Schedule GC of the job itself (only if loop is still running)
+            try:
+                loop.call_later(CHECK_JOB_TTL_SECONDS, JOBS.pop, job.check_id, None)
+            except RuntimeError:
+                # Loop already closed, just remove immediately
+                JOBS.pop(job.check_id, None)
 
 
 # ---------------------------------------------------------------- routes
@@ -227,9 +242,11 @@ async def stream_check(check_id: str):
 
     async def generator():
         seen = 0
+        last_version = job._event_version
         # SSE heartbeat: keep proxies from closing an idle stream
         last_heartbeat = time.time()
         while True:
+            # Emit any new events since last check
             while seen < len(job.events):
                 event = job.events[seen]
                 seen += 1
@@ -238,11 +255,19 @@ async def stream_check(check_id: str):
             if job.done and seen >= len(job.events):
                 yield "event: end\ndata: {}\n\n"
                 return
+            # Wait for new events (version change) or job completion
+            # Check version before waiting to avoid race: if version changed between
+            # the event emission loop and here, don't wait.
+            if job._event_version > last_version or job.done:
+                last_version = job._event_version
+                continue
             job._wake.clear()
             try:
                 await asyncio.wait_for(job._wake.wait(), timeout=15.0)
             except asyncio.TimeoutError:
                 pass
+            finally:
+                last_version = job._event_version  # Update version after waiting
             if time.time() - last_heartbeat > 20:
                 yield ": ping\n\n"
                 last_heartbeat = time.time()
