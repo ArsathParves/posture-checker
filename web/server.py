@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -169,12 +168,45 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 # ---------------------------------------------------------------- validation
 
-# Anything more permissive than this must be justified — the domain string is
-# passed to DNS/RDAP queries and must not accept URLs, IPs, or crafted input.
-DOMAIN_RE = re.compile(
-    r"^(?=.{1,253}$)([a-zA-Z0-9\u00a0-\uffff](?:[a-zA-Z0-9\u00a0-\uffff-]{0,61}"
-    r"[a-zA-Z0-9\u00a0-\uffff])?\.)+[a-zA-Z\u00a0-\uffff]{2,63}\.?$"
+# The upstream `normalize_domain` runs input through the `idna` codec, so at
+# this callsite the string is guaranteed to be ASCII punycode. A regex here
+# is overkill and historically shaped `([...]+)+` — a ReDoS-friendly pattern.
+# Label-by-label string checks are linear in input length by construction.
+_LABEL_ALLOWED = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
 )
+
+
+def _is_valid_domain(puny: str) -> bool:
+    """Linear-time punycode-domain validator (S4 ReDoS fix).
+
+    Contract: accepts everything the v0.5 DOMAIN_RE accepted after
+    `normalize_domain` has punycoded the input. Rejects empty labels,
+    leading/trailing hyphens, labels > 63 chars, overall length > 253,
+    single-label input, TLD < 2 chars, and all-numeric TLD.
+    """
+    if not puny:
+        return False
+    trimmed = puny[:-1] if puny.endswith(".") else puny
+    if not (1 <= len(trimmed) <= 253):
+        return False
+    labels = trimmed.split(".")
+    if len(labels) < 2:
+        return False
+    for label in labels:
+        if not (1 <= len(label) <= 63):
+            return False
+        if label[0] == "-" or label[-1] == "-":
+            return False
+        for ch in label:
+            if ch not in _LABEL_ALLOWED:
+                return False
+    tld = labels[-1]
+    if len(tld) < 2:
+        return False
+    if not any(c.isalpha() for c in tld):
+        return False
+    return True
 
 
 class CheckRequest(BaseModel):
@@ -199,7 +231,7 @@ def _validate_domain(raw: str) -> str:
     except ValueError as e:
         raise HTTPException(status_code=400,
                             detail=f"Not a valid domain: {e}")
-    if not DOMAIN_RE.match(puny):
+    if not _is_valid_domain(puny):
         raise HTTPException(status_code=400,
                             detail="Domain failed strict validation")
     return puny
