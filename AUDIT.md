@@ -208,7 +208,7 @@ The single most damaging correctness item is C4 (hardcoded anycast brand list in
 
 ## Documentation Issues
 
-- **DO1** — `README.md` present but does not document `pytest -m "not network"` as the offline gate. Add.
+- **DO1** — ✅ **DONE** — Rewrote `README.md` to catch up with the Phase-4/5 landscape. Added: preferred `pip install -e .[web]` path (with `[web,performance]` for opt-in uvloop on Linux/macOS), `posture-cli` and `posture-web` console-script names, a full CLI flag table (`--json`, `--no-info`, `--dkim-selector`, `--skip-asn`, `--strict`), Dockerfile invocation (`docker build` + `docker run -p 8000:8000`), self-test warnings banner (from L1), `pytest -m "not network"` as the CI contract with a note on why the `network` marker is nightly-only (flaky external DNS would produce false CI failures). Kept the legacy `run_cli.sh` / `run_web.sh` documentation as still-works fallbacks rather than removing them — the wrappers do useful things (venv guard from F2) and removing them would break external documentation pointing at them. Docs-only change; no test needed per CLAUDE.md rule 3 (rule 3 governs behavioural fixes, not documentation).
 - **DO2** — `CLAUDE.md` documents the Root Cause Principle but the code has no anchor comments pointing back to it at the sites that most need to remember (e.g., `dnsmod.detect_operators`).
 - **DO3** — `BUGS.md` lists N1–N33 but there is no cross-reference to the tests that pin each; the file `tests/test_dnssec_ad_fallback.py` names N1 but reverse lookup from BUGS.md is manual.
 - **DO4** — No architecture diagram. A one-page data-flow (CLI/Web → `checks.run` → sections → findings → grade) would meaningfully help onboarding.
