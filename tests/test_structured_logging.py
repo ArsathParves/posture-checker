@@ -147,6 +147,9 @@ def client_capturing_logs(monkeypatch):
 
     def fake_run_streaming(domain, dkim_selectors=None):
         yield {"event": "started", "domain": domain}
+        # B7: real generator (posture/checks.py:153) emits an
+        # environment event; caching is now gated on safe=True.
+        yield {"event": "environment", "safe": True, "notes": []}
         yield {"event": "complete", "report": {"domain": domain, "findings": []},
                "grades": {"correctness_grade": "A", "hardening_grade": "A",
                           "overall": "A", "hardening_gaps": []}}

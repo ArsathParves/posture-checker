@@ -111,12 +111,21 @@ an untested fix cycle regresses faster than it progresses.
   A meaningless grade renders identically to a real one.
   **Acceptance:** zero scored findings produces "Not gradeable", never a letter.
 
-- [ ] **B7. Cache poisoning across users (web).**
+- [x] **B7. Cache poisoning across users (web).** ✅ DONE
   `RESULT_CACHE` is keyed by domain only and shared across all visitors. A
   result computed while the environment was degraded is cached and served as
   fresh to the next user for 5 minutes.
   **Acceptance:** degraded/provisional results are never cached; cache key
   includes environment-health state.
+  **Post-impl:** `_run_job` inspects `job.events` for
+  `{"event": "environment", "safe": True}` before calling `_cache_result`.
+  Missing event or `safe=False` → not cached (conservative default). The
+  full domain-plus-env-state cache key was considered and rejected as
+  over-engineered: a degraded run's finding set has *no* legitimate
+  caller; storing it at all is worse than recomputing on the next
+  request. Pinned by `tests/test_cache_env_degradation_gate.py`
+  (5 cases: degraded skipped, missing-event skipped, healthy cached,
+  cached-result retrievable, errored-run skipped).
 
 - [ ] **B8. No per-check timeout ceiling — DoS vector (web).**
   8 concurrent slots, each check fans out to 30–50 queries with only
@@ -386,7 +395,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B4 | DONE (via AUDIT L4 + T1) | Section-exception isolation and rule-1 preservation on the DNSSEC path pinned by `tests/test_dnssec_probe_unretrievable.py` and `tests/test_checks_run_orchestration.py::test_section_exception_becomes_UNKNOWN_downstream_still_runs`. |
 | B5 | PARTIAL (via AUDIT G1/L2) | Correctness/hardening split is now surfaced in both CLI (`tests/test_grade_split_surfaced.py`) and the hardening-gaps caption (`tests/test_hardening_caption.py`). Per-section-grade vs overall reconciliation is not yet explained in-UI — deferred UX. |
 | B6 | OPEN | Fully-degraded run still emits a letter grade. `provisional` is set, but no "Not gradeable" band. Follow-up. |
-| B7 | PARTIAL (via AUDIT F4/P6) | `RESULT_CACHE` is now LRU-bounded (`tests/test_result_cache_lru.py`) but the *key* is still domain-only — an environment-degradation snapshot is not part of the key. Cross-user staleness under a flipping environment remains a residual risk. |
+| B7 | DONE | `_run_job` now gates `_cache_result` on a positive `{"event": "environment", "safe": True}` marker in `job.events`. Degraded-environment runs and runs missing the marker are never cached, closing the cross-user staleness gap. LRU bound + TTL from AUDIT F4/P6 unchanged. Pinned by `tests/test_cache_env_degradation_gate.py`. |
 | B8 | PARTIAL (via AUDIT S7) | Per-connection SSE ceiling shipped (`tests/test_web_sse_timeout.py`, `SSE_MAX_STREAM_SECONDS = 120`). A global per-check deadline that bounds `run_streaming` itself is a separate follow-up. |
 
 ### P1 — RFC correctness

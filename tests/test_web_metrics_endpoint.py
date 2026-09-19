@@ -34,6 +34,11 @@ def client(monkeypatch):
 
     def fake_run_streaming(domain, dkim_selectors=None):
         yield {"event": "started", "domain": domain}
+        # B7: caching is gated on a positive environment=safe=True
+        # marker, mirroring the real generator's contract
+        # (posture/checks.py:153). Emit it so cache-hit assertions
+        # below reflect the healthy-network case they intend to test.
+        yield {"event": "environment", "safe": True, "notes": []}
         yield {"event": "complete",
                "report": {"domain": domain, "findings": []},
                "grades": {"correctness_grade": "A", "hardening_grade": "A",

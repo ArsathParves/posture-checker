@@ -385,11 +385,24 @@ async def _run_job(job: Job):
 
             duration_s = round(time.time() - job.created_at, 3)
             if not job.error:
-                _cache_result(job, time.time() + CACHE_TTL_SECONDS)
+                # B7: only cache when the run observed a healthy
+                # environment. RESULT_CACHE is shared across every
+                # visitor for CACHE_TTL_SECONDS; a run computed while
+                # TCP/53 was blocked or DNS was intercepted contains
+                # false-absent findings that must not be served to a
+                # user on a clean network. Missing environment event is
+                # treated as "not safe" — a positive safe=True signal
+                # is the only thing that unlocks caching.
+                env_ev = next((e for e in job.events
+                               if e.get("event") == "environment"), None)
+                env_safe = bool(env_ev and env_ev.get("safe"))
+                if env_safe:
+                    _cache_result(job, time.time() + CACHE_TTL_SECONDS)
                 log.info("check completed",
                          extra={"check_id": job.check_id, "domain": job.domain,
                                 "duration_s": duration_s,
-                                "events": len(job.events)})
+                                "events": len(job.events),
+                                "cached": env_safe})
                 CHECKS_COMPLETED.inc()
                 CHECK_DURATION.observe(duration_s)
 
