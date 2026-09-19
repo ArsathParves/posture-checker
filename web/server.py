@@ -56,6 +56,17 @@ MAX_CONCURRENT_CHECKS = 8     # per process
 # governs when the job is discarded. 120s is generous for the check
 # itself (typical run: 10–30s) but bounds a hung connection tightly.
 SSE_MAX_STREAM_SECONDS = 120
+# B8: global wall-clock ceiling on a single check. Complements the
+# per-query timeouts inside `run_streaming`: a domain whose 30–50 DNS
+# and RDAP queries each walk right up to their individual timeouts can
+# otherwise hold a `CHECK_SEMAPHORE` slot for 90–150 seconds. Eight
+# such domains submitted concurrently take the tool down. 90s bounds
+# the total run — a real check typically finishes in 10–30s, so this
+# is generous for legitimate use and tight for abuse. When exceeded,
+# `_run_job` emits a synthetic `timeout` + `complete` event pair so
+# partial section events already streamed remain visible to the
+# client and the SSE consumer terminates cleanly.
+CHECK_MAX_SECONDS = 90
 
 
 # ---------------------------------------------------------------- state
@@ -344,14 +355,60 @@ def _run_streaming_sync(domain: str, dkim_selectors: list[str] | None):
     yield from run_streaming(domain, dkim_selectors=dkim_selectors)
 
 
+def _emit_timeout(job: Job) -> None:
+    """B8: append synthetic `timeout` + terminal `complete` events when
+    the per-check deadline fires. The `complete` frame is required so
+    the SSE consumer's `event == 'complete'` termination check trips
+    and the client does not wait for a final frame that never arrives.
+    The synthetic report is marked partial so downstream renderers can
+    render "Not gradeable" (B6) rather than a spurious letter grade."""
+    elapsed = round(time.time() - job.created_at, 3)
+    job.events.append({
+        "event": "timeout",
+        "elapsed_s": elapsed,
+        "deadline_s": CHECK_MAX_SECONDS,
+        "message": (f"per-check deadline exceeded after {elapsed}s; "
+                    f"results are partial"),
+    })
+    job._event_version += 1
+    job.events.append({
+        "event": "complete",
+        "report": {"partial": True, "reason": "timeout"},
+        "grades": {"overall": "—", "provisional": True,
+                   "correctness_grade": "—", "hardening_grade": "—",
+                   "hardening_gaps": [], "sections": {},
+                   "ungraded_sections": [], "unknown_in": []},
+    })
+    job._event_version += 1
+    job._wake.set()
+
+
 async def _run_job(job: Job):
     """Consume run_streaming() in a worker thread; push events into the job."""
     loop = asyncio.get_running_loop()
     async with CHECK_SEMAPHORE:
         gen = _run_streaming_sync(job.domain, job.dkim_selectors)
+        # B8: hard wall-clock deadline. `asyncio.wait_for` bounds each
+        # `next()` on the generator by the *remaining* budget, so a
+        # single stuck query cannot burn the whole ceiling waiting for
+        # its per-query timeout to expire. On expiry we abandon the
+        # generator (its thread finishes on its own; the semaphore slot
+        # is released when this coroutine returns).
+        deadline = job.created_at + CHECK_MAX_SECONDS
         try:
             while True:
-                event = await loop.run_in_executor(None, next, gen, None)
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    _emit_timeout(job)
+                    break
+                try:
+                    event = await asyncio.wait_for(
+                        loop.run_in_executor(None, next, gen, None),
+                        timeout=remaining,
+                    )
+                except asyncio.TimeoutError:
+                    _emit_timeout(job)
+                    break
                 if event is None:
                     break
                 job.events.append(event)
@@ -396,13 +453,23 @@ async def _run_job(job: Job):
                 env_ev = next((e for e in job.events
                                if e.get("event") == "environment"), None)
                 env_safe = bool(env_ev and env_ev.get("safe"))
-                if env_safe:
+                # B8: a deadline-truncated run has partial data — its
+                # section events reflect only whatever `run_streaming`
+                # reached before the ceiling. Caching partial data
+                # would let a single slow-domain attack poison the
+                # cache for `CACHE_TTL_SECONDS`; independent of B7's
+                # env-safe gate.
+                timed_out = any(e.get("event") == "timeout"
+                                for e in job.events)
+                should_cache = env_safe and not timed_out
+                if should_cache:
                     _cache_result(job, time.time() + CACHE_TTL_SECONDS)
                 log.info("check completed",
                          extra={"check_id": job.check_id, "domain": job.domain,
                                 "duration_s": duration_s,
                                 "events": len(job.events),
-                                "cached": env_safe})
+                                "cached": should_cache,
+                                "timed_out": timed_out})
                 CHECKS_COMPLETED.inc()
                 CHECK_DURATION.observe(duration_s)
 

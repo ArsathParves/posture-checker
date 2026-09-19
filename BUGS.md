@@ -137,13 +137,26 @@ an untested fix cycle regresses faster than it progresses.
   (5 cases: degraded skipped, missing-event skipped, healthy cached,
   cached-result retrievable, errored-run skipped).
 
-- [ ] **B8. No per-check timeout ceiling — DoS vector (web).**
+- [x] **B8. No per-check timeout ceiling — DoS vector (web).** ✅ DONE
   8 concurrent slots, each check fans out to 30–50 queries with only
   per-query timeouts. Eight deliberately-slow domains hold every slot for
   the summed timeout and take the tool down. Must be fixed before public
   deployment.
   **Acceptance:** a global per-check deadline is enforced; a slow domain
   returns partial results rather than holding a slot indefinitely.
+  **Post-impl:** `CHECK_MAX_SECONDS = 90` module-level constant;
+  `_run_job` wraps each `next()` on the generator with
+  `asyncio.wait_for(remaining_budget)`. On expiry, `_emit_timeout`
+  appends a synthetic `{"event": "timeout"}` and a terminal
+  `{"event": "complete"}` with a partial-report marker so SSE
+  consumers terminate cleanly and clients see the partial section
+  events already emitted. Cache gate refuses to store timed-out runs
+  (independent of B7's env-safe gate). Combined with S7's
+  `SSE_MAX_STREAM_SECONDS`, the tool now enforces both connection-
+  side and check-side bounds. Pinned by
+  `tests/test_web_check_deadline.py` (6 cases: constant exists,
+  deadline fires + terminates, final `complete` emitted, timeout not
+  cached, fast run unaffected, boundary run unaffected).
 
 ---
 
@@ -406,7 +419,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B5 | PARTIAL (via AUDIT G1/L2) | Correctness/hardening split is now surfaced in both CLI (`tests/test_grade_split_surfaced.py`) and the hardening-gaps caption (`tests/test_hardening_caption.py`). Per-section-grade vs overall reconciliation is not yet explained in-UI — deferred UX. |
 | B6 | DONE | `grade()` short-circuits to `overall="—"` when zero findings are scored, before the worst/avg fallback that was landing on "A". CLI header and web renderer surface `"—"` as the descriptive phrase "Not gradeable". Pinned by `tests/test_grade_not_gradeable_when_empty.py`. |
 | B7 | DONE | `_run_job` now gates `_cache_result` on a positive `{"event": "environment", "safe": True}` marker in `job.events`. Degraded-environment runs and runs missing the marker are never cached, closing the cross-user staleness gap. LRU bound + TTL from AUDIT F4/P6 unchanged. Pinned by `tests/test_cache_env_degradation_gate.py`. |
-| B8 | PARTIAL (via AUDIT S7) | Per-connection SSE ceiling shipped (`tests/test_web_sse_timeout.py`, `SSE_MAX_STREAM_SECONDS = 120`). A global per-check deadline that bounds `run_streaming` itself is a separate follow-up. |
+| B8 | DONE | S7's `SSE_MAX_STREAM_SECONDS` bounds the connection; `CHECK_MAX_SECONDS = 90` now bounds the check itself. `_run_job` wraps each `next()` with `asyncio.wait_for(remaining_budget)`; on expiry emits synthetic `timeout` + terminal `complete` events. Cache gate refuses timed-out runs. Pinned by `tests/test_web_check_deadline.py`. |
 
 ### P1 — RFC correctness
 
