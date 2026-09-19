@@ -321,3 +321,90 @@ These areas have had no systematic review. Expect further findings:
 - IDN homograph display safety in both UIs
 - Behaviour under IPv6-only egress
 - Memory growth of `_qcache` and `JOBS` over long process lifetimes
+
+---
+
+## Cross-reference: status & pinning tests
+
+Reverse-lookup index for the work queue above. Each row names the current
+state of a BUGS.md item and the test file(s) that pin the fix — so a
+future author can navigate from an item ID to its regression guard
+without grepping. When a BUGS item was addressed by an `AUDIT.md` item
+under a different ID, both are named.
+
+Status values: **DONE** (fix shipped, regression-pinned), **PARTIAL**
+(subset shipped; residual work described), **WITHDRAWN** (finding
+premise was incorrect on inspection), **OPEN** (unaddressed, no test).
+
+### EPIC 0 — Testability foundation
+
+| ID | Status | Pinning tests / notes |
+|---|---|---|
+| T1 | OPEN | Typed finding schema not shipped. `Report.add` still takes label strings; grading keys off label content via `hardening=` attribute (G2). A `finding_id` migration is a future refactor. |
+| T2 | OPEN | Severity is still flat PASS/WARN/FAIL. `--strict` (G4) promotes WARN→FAIL for scoring but does not introduce a CRITICAL tier. See `tests/test_grade_strict_mode.py` for the strict-mode semantics. |
+| T3 | DONE | Offline test harness in place — nearly every test patches DNS/RDAP/HTTP entry points. `pytest -m "not network"` passes with zero outbound traffic. Enforced by CI (`.github/workflows/tests.yml`, pinned by `tests/test_ci_workflow.py`). |
+| T4 | PARTIAL | `tests/test_grading_ground_truth.py` pins grade outcomes for cloudflare.com / dnssec-failed.org / vergecloud.com; `tests/test_grading_google_unsigned.py` pins google.com. No full "golden file" per-finding output pin yet — deferred. |
+| T5 | OPEN | Per-finding confidence field not shipped. UI does not surface confidence. |
+| T6 | OPEN | See AUDIT.md TD5 (structured logging) and TD6 (correlation IDs / metrics). |
+
+### P0 — Critical
+
+| ID | Status | Pinning tests / notes |
+|---|---|---|
+| B1 | DONE (via AUDIT C4) | `tests/test_anycast_classifier.py` (ASN-first classifier), `tests/test_operator_diversity_finding.py` (call-site wiring incl. vergecloud). |
+| B2 | DONE (via AUDIT C4) | Same fix — ASN grouping in `checks._nameservers`. Pinned by the vergecloud rows in `tests/test_anycast_classifier.py`. |
+| B3 | OPEN | Only `transferProhibited` is read today. `posture/checks.py::_registration` carries a `ROOT CAUSE PRINCIPLE` anchor (DO2) naming EPP's full status set as the source of truth to widen when finding-relevant. `clientHold`, `redemptionPeriod`, `pendingDelete` remain unmapped. |
+| B4 | DONE (via AUDIT L4 + T1) | Section-exception isolation and rule-1 preservation on the DNSSEC path pinned by `tests/test_dnssec_probe_unretrievable.py` and `tests/test_checks_run_orchestration.py::test_section_exception_becomes_UNKNOWN_downstream_still_runs`. |
+| B5 | PARTIAL (via AUDIT G1/L2) | Correctness/hardening split is now surfaced in both CLI (`tests/test_grade_split_surfaced.py`) and the hardening-gaps caption (`tests/test_hardening_caption.py`). Per-section-grade vs overall reconciliation is not yet explained in-UI — deferred UX. |
+| B6 | OPEN | Fully-degraded run still emits a letter grade. `provisional` is set, but no "Not gradeable" band. Follow-up. |
+| B7 | PARTIAL (via AUDIT F4/P6) | `RESULT_CACHE` is now LRU-bounded (`tests/test_result_cache_lru.py`) but the *key* is still domain-only — an environment-degradation snapshot is not part of the key. Cross-user staleness under a flipping environment remains a residual risk. |
+| B8 | PARTIAL (via AUDIT S7) | Per-connection SSE ceiling shipped (`tests/test_web_sse_timeout.py`, `SSE_MAX_STREAM_SECONDS = 120`). A global per-check deadline that bounds `run_streaming` itself is a separate follow-up. |
+
+### P1 — RFC correctness
+
+| ID | Status | Pinning tests / notes |
+|---|---|---|
+| B9 | DONE | Single-query path with TC-bit inspection + TCP retry lives in `dnsmod.query`. Pinned by `tests/test_query_cache.py` and `tests/test_query_cache_lru.py`; SPF-facing behaviour by `tests/test_txt_unretrievable_wider.py`. |
+| B10 | DONE | `tests/test_spf_counting.py::test_redirect_ignored_when_all_present` pins RFC 7208 §6.1. |
+| B11 | WITHDRAWN (AUDIT C5) | Audit premise misread §4.6.4. `mx` costs exactly 1. Pinned RFC-compliant by `tests/test_spf_counting.py::test_bare_mx_counts_as_one_per_rfc_7208_4_6_4` and `test_mx_with_target_counts_as_one_per_rfc_7208_4_6_4`. |
+| B12 | OPEN | Per-lookup vs per-distinct-domain counting not addressed. `_seen` still dedupes. |
+| B13 | OPEN | SPF recursion depth guards not reconciled. Trace vs count divergence not pinned. |
+| B14 | OPEN | `sp` / `adkim` / `aspf` still parsed but not evaluated in grading. |
+| B15 | DONE (via AUDIT FP5) | `tests/test_caa_parent_walkup.py` pins the parent-label walk per RFC 8659 §3. |
+| B16 | OPEN | CAA `issue` / `issuewild` / `iodef` distinction not parsed. `issue ";"` (no-CA form) not recognised. |
+| B17 | DONE | `tests/test_normalize_domain.py::TestIpRejection`, `tests/test_web_validation.py`, and `tests/test_validator_parity.py` (L3) pin IP rejection at both entry points. |
+| B18 | DONE | `tests/test_normalize_domain.py::TestBoundaryLengths` — 63/64-char label and 253/254-octet total-name pins (E1). |
+| B19 | DONE | Same file — TLD length rejection. |
+
+### P2 — Missing checks
+
+| ID | Status | Pinning tests / notes |
+|---|---|---|
+| B20 | OPEN | Subdomain takeover / dangling records — no check. This is the highest-value P2 gap; a dedicated `posture/takeover.py` module + CRITICAL tier (T2) is a natural pairing. |
+| B21 | OPEN | MX validation (CNAME/IP-literal/dangling) — no check. |
+| B22 | OPEN | Bogon/private-space sanity — no check. |
+| B23 | OPEN | Glue-record consistency — no check. |
+| B24 | OPEN | NSEC vs NSEC3 zone-walking exposure — no check. |
+| B25 | OPEN | CDS/CDNSKEY (RFC 7344/8078) — no check. |
+| B26 | OPEN | Authoritative NS's own TCP/53 support — no check. |
+| B27 | OPEN | EDNS compliance / DNS cookies (RFC 7873) — no check. |
+| B28 | OPEN | Negative-answer correctness — no check. |
+| B29 | PARTIAL (via AUDIT D5/FN5) | `authoritative_vs_cached` cross-checks A/AAAA. MX/TXT/CAA/NS cross-checks remain unimplemented. |
+| B30 | OPEN | TLS/cert posture — no check. |
+
+### P3 — Regional / bias / validation
+
+| ID | Status | Pinning tests / notes |
+|---|---|---|
+| B31 | OPEN | Public resolver pool remains US-first. Adding an Indian resolver + multi-vantage reporting is a targeted follow-up. |
+| B32 | DONE (via AUDIT FN2) | `tests/test_dkim_selector_coverage.py` pins the India-region additions (Netcore, Pepipost, Zeptomail, Kaleyra, Gupshup) plus the six FN2 ESP entries. |
+| B33 | PARTIAL (via AUDIT T4) | `tests/test_selftest_check_environment.py` pins the six-key return-shape contract and fault-injection semantics. Trigger-happy (single-probe interception) is intentional — see the "partial interception still flags intercepted" test. SPOF control resolver / UDP-fragmentation blind spots remain. |
+| B34 | DONE (via AUDIT D1) | `tests/test_query_cache.py` and `tests/test_query_cache_lru.py` pin TTL + LRU. |
+| B35 | OPEN | AD-bit probe still hits `8.8.8.8` singleton. Failover is a small follow-up. |
+| B36 | PARTIAL | CLAUDE.md rule 7 (vendor neutrality) is doctrine; remediation copy has been re-worded in-place but a data-model-level "general fix first, vendor secondary" restructure is still open. |
+| B37 | PARTIAL | Consensus reads via `parent_delegation` (D2), authoritative cross-check for A/AAAA (D5), per-run environment self-test (rule 5). Cross-resolver consensus for TXT/DNSKEY and confidence intervals remain unbuilt. |
+
+**Summary:** of 43 items, 21 are pinned DONE, 8 PARTIAL (subset shipped),
+2 WITHDRAWN, and 12 OPEN. See `AUDIT.md` for the newer, prioritised
+remediation ledger — the two files intentionally overlap because BUGS.md
+is the raw work-queue history and AUDIT.md is the current sweep.
