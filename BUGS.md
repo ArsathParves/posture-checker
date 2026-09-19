@@ -201,11 +201,14 @@ an untested fix cycle regresses faster than it progresses.
     (= full zone takeover)
   **Severity when found: CRITICAL.**
 
-- [ ] **B21. MX records listed but never validated.**
-  No check that MX hostnames resolve (dangling MX = no mail delivery), that
-  no MX points to a CNAME (**forbidden by RFC 2181 §10.3**), that MX targets
-  are not IP literals (invalid per RFC 1035), or that the mail path has any
-  redundancy.
+- [x] **B21. MX records listed but never validated.** ✅ DONE
+  `_records` now runs target-side sanity: IP literals (RFC 1035 §3.3.9
+  violation), CNAME targets (RFC 2181 §10.3 violation), and dangling
+  targets (no A/AAAA) all surface as `MX target` FAIL. Single MX emits
+  `MX redundancy` WARN. Rule 1 exemption: null-MX and no-MX both skip
+  all target-side checks. Pinned by `tests/test_mx_target_validation.py`
+  (9 cases including partial-dangling detail scoping and the rule-1
+  exemptions).
 
 - [ ] **B22. A/AAAA never sanity-checked against bogon/private space.**
   Records pointing into RFC1918, `127.0.0.0/8`, or unallocated space are a
@@ -386,7 +389,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | ID | Status | Pinning tests / notes |
 |---|---|---|
 | B20 | OPEN | Subdomain takeover / dangling records — no check. This is the highest-value P2 gap; a dedicated `posture/takeover.py` module + CRITICAL tier (T2) is a natural pairing. |
-| B21 | OPEN | MX validation (CNAME/IP-literal/dangling) — no check. |
+| B21 | DONE | MX target validation added to `_records`: IP literal (RFC 1035 §3.3.9), CNAME target (RFC 2181 §10.3), dangling target — all FAIL with target names in detail. Single MX = WARN redundancy. Null-MX / no-MX exempt. Pinned by `tests/test_mx_target_validation.py` (9 cases). |
 | B22 | DONE | Apex A/AAAA bogon check added to `checks._records`. `_is_bogon_address` uses stdlib `ipaddress` classification (`is_private`, `is_loopback`, `is_link_local`, `is_multicast`, `is_reserved`, `is_unspecified`) plus an explicit RFC 6598 CGN (`100.64/10`) fallback for Python <3.13. Emits `A record bogon check` / `AAAA record bogon check` at FAIL when the finding is non-empty; skipped entirely when the record is absent (rule 1 preserved). Pinned by `tests/test_bogon_private_space.py` (10 cases: RFC 1918, loopback, doc-range, mixed public+private, IPv6 ULA / link-local / doc-range, plus non-regression cases for public IPv4/IPv6 and empty-records). |
 | B23 | OPEN | Glue-record consistency — no check. |
 | B24 | OPEN | NSEC vs NSEC3 zone-walking exposure — no check. |

@@ -663,6 +663,65 @@ def _records(rep: Report, d: str):
         rep.add(S, "MX record", "PASS" if mx_recs else "INFO",
                 ", ".join(mx_recs) or "none — domain does not receive mail")
 
+    # B21: MX target sanity. Rule 1 exemption: null-MX (`0 .`) declares
+    # "no mail" — target-side checks do not apply. No-MX likewise
+    # exempts (not a mail domain). We only run when MX is actually
+    # present and non-null.
+    if not null_mx and mx_recs:
+        ip_literals: list[str] = []
+        cname_targets: list[str] = []
+        dangling: list[str] = []
+        for rec in mx_recs:
+            parts = rec.split()
+            if len(parts) != 2:
+                continue  # malformed record — not our concern here
+            target = parts[1].rstrip(".")
+            if not target:
+                continue
+            # RFC 1035 §3.3.9: MX target is a <domain-name>, not an IP.
+            try:
+                ipaddress.ip_address(target)
+                ip_literals.append(target)
+                continue
+            except ValueError:
+                pass
+            # RFC 2181 §10.3: CNAME must not be used as MX target.
+            tgt_cname = dnsmod.query(target, "CNAME")
+            if tgt_cname.get("records"):
+                cname_targets.append(target)
+                continue
+            # Dangling: no A/AAAA on the target hostname.
+            tgt_a = dnsmod.query(target, "A")
+            tgt_aaaa = dnsmod.query(target, "AAAA")
+            if not (tgt_a.get("records") or tgt_aaaa.get("records")):
+                dangling.append(target)
+
+        problems: list[str] = []
+        if ip_literals:
+            problems.append(f"IP literal: {', '.join(ip_literals)}")
+        if cname_targets:
+            problems.append(
+                f"CNAME target (RFC 2181 §10.3 violation): "
+                f"{', '.join(cname_targets)}"
+            )
+        if dangling:
+            problems.append(
+                f"dangling / does not resolve: {', '.join(dangling)}"
+            )
+        if problems:
+            rep.add(S, "MX target", "FAIL", "; ".join(problems),
+                    "MX records with invalid or unroutable targets. "
+                    "RFC 1035 §3.3.9 requires a hostname (not an IP); "
+                    "RFC 2181 §10.3 forbids a CNAME target; a dangling "
+                    "target accepts mail attempts that then fail.")
+
+        if len(mx_recs) == 1:
+            rep.add(S, "MX redundancy", "WARN",
+                    f"only one MX target ({mx_recs[0]})",
+                    "A single MX is valid but has no failover — if the "
+                    "sole target is unreachable, inbound mail pauses "
+                    "until it recovers.")
+
     if caa.get("records"):
         rep.add(S, "CAA record", "PASS", ", ".join(caa["records"]),
                 hardening=True)
