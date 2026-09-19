@@ -452,55 +452,90 @@ def dnssec_status(domain: str) -> dict:
     if not ad_checked:
         out["notes"].append("AD-bit check inconclusive: no validating resolver responded")
 
-    # --- overall verdict ----------------------------------------------
-    # Fully validated requires: self-signed AND DS matches AND (AD confirms OR
-    # AD inconclusive but the cryptographic chain checks out).
-    if out["self_signed"] and out["ds_matches_dnskey"]:
-        if out["ad_authenticated"] is False:
-            out["validated"] = False  # crypto looks fine but resolver rejects
-        else:
-            out["validated"] = True
-    elif out["self_signed"] is False or out["ds_matches_dnskey"] is False:
-        out["validated"] = False
+    # --- verdict + state machine (extracted to a pure helper so the
+    # branch logic is directly unit-testable without needing to mock
+    # the DS/DNSKEY/RRSIG DNS wire path). See `_dnssec_derive_state`.
+    state, extra_notes, validated = _dnssec_derive_state(
+        ds=out["ds"], dnskey=out["dnskey"],
+        self_signed=out["self_signed"],
+        ds_matches_dnskey=out["ds_matches_dnskey"],
+        ad_authenticated=out["ad_authenticated"],
+        ds_probe_responded=ds_probe_responded,
+        dnskey_probe_responded=dnskey_probe_responded,
+    )
+    out["validated"] = validated
+    out["state"] = state
+    out["notes"].extend(extra_notes)
+    return out
 
-    # --- state machine ------------------------------------------------
-    # L4 gate: if either probe couldn't reach a resolver, we have no basis
-    # for claiming the zone is unsigned. `not_configured` requires positive
-    # evidence (a resolver replied "no records") on both DS and DNSKEY.
+
+def _dnssec_derive_state(
+    *,
+    ds: bool,
+    dnskey: bool,
+    self_signed,           # True | False | None
+    ds_matches_dnskey,     # True | False | None
+    ad_authenticated,      # True | False | None
+    ds_probe_responded: bool,
+    dnskey_probe_responded: bool,
+) -> tuple[str, list[str], bool | None]:
+    """Pure state-machine derivation of `(state, notes, validated)`
+    from the six atomic DNSSEC signals collected in `dnssec_status`.
+
+    Kept pure and side-effect-free so the branch logic can be tested
+    without mocking `dns.query.udp` + `dns.dnssec.validate` + `make_ds`.
+    Every branch must match `dnssec_status`'s pre-extraction behaviour
+    byte-for-byte — this is a mechanical extraction, not a rewrite.
+
+    Returns:
+      state: one of {"validating", "broken", "incomplete",
+                     "not_configured", "unknown"}
+      notes: additional note strings to append to the caller's notes list
+      validated: True | False | None — matches out["validated"]
+    """
+    notes: list[str] = []
+
+    # Overall crypto verdict: self-signed + DS matches + AD not rejecting.
+    validated: bool | None = None
+    if self_signed and ds_matches_dnskey:
+        if ad_authenticated is False:
+            validated = False  # crypto ok but validating resolver rejects
+        else:
+            validated = True
+    elif self_signed is False or ds_matches_dnskey is False:
+        validated = False
+
+    # L4 gate: unretrievable probes cannot yield `not_configured`.
     if not ds_probe_responded and not dnskey_probe_responded:
-        out["state"] = "unknown"
-        out["notes"].append(
+        notes.append(
             "DS and DNSKEY probes unretrievable — UDP/53 may be blocked "
             "or every public resolver was unreachable"
         )
-        return out
-    if not ds_probe_responded and not out["dnskey"]:
-        out["state"] = "unknown"
-        out["notes"].append(
+        return "unknown", notes, validated
+    if not ds_probe_responded and not dnskey:
+        notes.append(
             "DS probe unretrievable — cannot claim zone is unsigned "
             "without a parent-side answer"
         )
-        return out
-    if not out["ds"] and not out["dnskey"]:
-        out["state"] = "not_configured"
-    elif out["validated"] is True:
-        out["state"] = "validating"
-    elif out["ds"] and out["dnskey"] and out["ds_matches_dnskey"] is False:
-        out["state"] = "broken"
-    elif out["ds"] and out["dnskey"] and out["self_signed"] is False:
-        out["state"] = "broken"
-    elif out["ad_authenticated"] is False and out["ds"] and out["dnskey"]:
-        out["state"] = "broken"
-    elif out["ds"] and not out["dnskey"]:
-        out["state"] = "broken"
-        out["notes"].append("DS published at parent but no DNSKEY at child")
-    elif out["dnskey"] and not out["ds"]:
-        out["state"] = "incomplete"
-        out["notes"].append("Zone is signed but no DS at parent — chain not anchored")
-    else:
-        out["state"] = "unknown"
+        return "unknown", notes, validated
 
-    return out
+    if not ds and not dnskey:
+        return "not_configured", notes, validated
+    if validated is True:
+        return "validating", notes, validated
+    if ds and dnskey and ds_matches_dnskey is False:
+        return "broken", notes, validated
+    if ds and dnskey and self_signed is False:
+        return "broken", notes, validated
+    if ad_authenticated is False and ds and dnskey:
+        return "broken", notes, validated
+    if ds and not dnskey:
+        notes.append("DS published at parent but no DNSKEY at child")
+        return "broken", notes, validated
+    if dnskey and not ds:
+        notes.append("Zone is signed but no DS at parent — chain not anchored")
+        return "incomplete", notes, validated
+    return "unknown", notes, validated
 
 
 def authoritative_vs_cached(domain: str, ns_map: dict) -> dict:
