@@ -1053,6 +1053,54 @@ def _email(rep: Report, d: str, dkim_selectors):
         elif strength == "moderate":
             why = "p=quarantine sends failing mail to spam rather than rejecting it."
         rep.add(S, "DMARC policy", status, f"p={dmarc['policy']} (pct={dmarc['pct']})", why)
+
+        # B14: `sp` subdomain policy. RFC 7489 §6.3 — when unset,
+        # subdomains inherit `p`; when set, `sp` overrides `p` for
+        # subdomains. A weaker `sp` than `p` is a real, exploitable
+        # gap (attacker spoofs from `anything.victim.com` because
+        # subdomain policy is `none`).
+        _STRENGTH_RANK = {"reject": 3, "quarantine": 2, "none": 1}
+        sp = (dmarc.get("subdomain_policy") or "").lower() or None
+        if sp is not None:
+            p_rank = _STRENGTH_RANK.get(dmarc["policy"], 0)
+            sp_rank = _STRENGTH_RANK.get(sp, 0)
+            gap = p_rank - sp_rank
+            if gap >= 2:
+                sp_status = "FAIL"
+                sp_why = ("Subdomain policy is materially weaker than the "
+                          "apex policy. Attackers can spoof from any "
+                          "subdomain because receivers apply this weaker "
+                          "policy there instead of the strict apex `p`.")
+            elif gap == 1:
+                sp_status = "WARN"
+                sp_why = ("Subdomain policy is one step weaker than the "
+                          "apex policy — subdomains get lighter enforcement "
+                          "than the apex claims.")
+            else:
+                sp_status = "PASS"
+                sp_why = ""
+            rep.add(S, "DMARC subdomain policy", sp_status,
+                    f"sp={sp} (p={dmarc['policy']})", sp_why)
+
+        # B14: alignment modes. `adkim` / `aspf` default to `r` (relaxed)
+        # per §3.1 — a valid, common choice. `s` (strict) is a hardening
+        # choice; surface it with hardening=True so it feeds the hardening
+        # bucket without pushing every relaxed-default domain toward WARN.
+        adkim = (dmarc.get("alignment_dkim") or "r").lower()
+        if adkim == "s":
+            rep.add(S, "DMARC alignment (DKIM)", "PASS",
+                    "adkim=s (strict)",
+                    "Strict DKIM identifier alignment — signing domain "
+                    "must exactly match the From: header domain.",
+                    hardening=True)
+        aspf = (dmarc.get("alignment_spf") or "r").lower()
+        if aspf == "s":
+            rep.add(S, "DMARC alignment (SPF)", "PASS",
+                    "aspf=s (strict)",
+                    "Strict SPF identifier alignment — the MAIL FROM "
+                    "domain must exactly match the From: header domain.",
+                    hardening=True)
+
         rep.add(S, "DMARC reporting", "PASS" if dmarc.get("rua") else "WARN",
                 dmarc.get("rua") or "no rua= aggregate reporting address",
                 "" if dmarc.get("rua") else "Without rua you get no visibility into who is sending as your domain.",

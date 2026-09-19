@@ -163,11 +163,19 @@ an untested fix cycle regresses faster than it progresses.
   Entry guard is `depth > 10`, recursion guard is `depth < 5`. Count and
   displayed trace can disagree; the trace under-represents what was counted.
 
-- [ ] **B14. DMARC `sp=` and alignment modes parsed but never evaluated.**
-  `sp`, `adkim`, `aspf` are read into the dict then ignored; grading uses
-  only `p=`. A domain with `p=reject; sp=none` (strict apex, wide-open
-  subdomains — a real and common misconfiguration) grades identically to
-  `p=reject; sp=reject`.
+- [x] **B14. DMARC `sp=` and alignment modes parsed but never evaluated.** ✅ DONE
+  `_email` now emits three additional findings when DMARC is present:
+  * `DMARC subdomain policy` — compares `sp` to `p` using a strength
+    rank (reject=3, quarantine=2, none=1). Gap ≥ 2 → FAIL (`sp=none`
+    with `p=reject`), gap 1 → WARN, gap ≤ 0 → PASS. Absent `sp` emits
+    no finding (RFC 7489 §6.3 inheritance).
+  * `DMARC alignment (DKIM)` — `adkim=s` → PASS + hardening.
+  * `DMARC alignment (SPF)` — `aspf=s` → PASS + hardening.
+  Relaxed alignment (the RFC default) emits no negative finding.
+  Pinned by `tests/test_dmarc_sp_and_alignment.py` (9 cases including
+  the `sp=none` + `p=reject` FAIL, one-step WARN, inheritance, strict
+  alignment hardening, relaxed-default backstop, and rule-1 exemption
+  when DMARC is absent).
 
 - [ ] **B15. CAA checked only at apex, no tree walk (RFC 8659).**
   CAs walk up the tree. A subdomain inheriting valid parent CAA is falsely
@@ -386,7 +394,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B11 | WITHDRAWN (AUDIT C5) | Audit premise misread §4.6.4. `mx` costs exactly 1. Pinned RFC-compliant by `tests/test_spf_counting.py::test_bare_mx_counts_as_one_per_rfc_7208_4_6_4` and `test_mx_with_target_counts_as_one_per_rfc_7208_4_6_4`. |
 | B12 | DONE | `_count_spf_lookups` uses per-path `seen` (frozenset copy-on-add). Sibling branches count independently per RFC 7208 §4.6.4. Pinned by `tests/test_spf_seen_perpath.py` (4 cases). |
 | B13 | OPEN | SPF recursion depth guards not reconciled. Trace vs count divergence not pinned. |
-| B14 | OPEN | `sp` / `adkim` / `aspf` still parsed but not evaluated in grading. |
+| B14 | DONE | `_email` emits `DMARC subdomain policy` (strength-rank gap → PASS/WARN/FAIL) and `DMARC alignment (DKIM)` / `DMARC alignment (SPF)` (hardening PASS when strict). Pinned by `tests/test_dmarc_sp_and_alignment.py` (9 cases). |
 | B15 | DONE (via AUDIT FP5) | `tests/test_caa_parent_walkup.py` pins the parent-label walk per RFC 8659 §3. |
 | B16 | DONE | `_parse_caa_record` + per-tag emission in `_records`. Pinned by `tests/test_caa_tag_semantics.py` (8 cases: issue, issuewild, no-CA `;` lockdown, iodef PASS+hardening, iodef WARN+hardening, malformed WARN, non-regression). |
 | B17 | DONE | `tests/test_normalize_domain.py::TestIpRejection`, `tests/test_web_validation.py`, and `tests/test_validator_parity.py` (L3) pin IP rejection at both entry points. |
