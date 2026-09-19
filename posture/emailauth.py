@@ -284,6 +284,86 @@ def evaluate_dmarc(domain: str) -> dict:
     }
 
 
+def _parse_dmarc_uri(raw: str) -> tuple[str | None, str | None]:
+    """Return `(scheme, host)` for a DMARC rua/ruf URI, or `(None, None)`
+    if unparseable. RFC 7489 allows any URI but only `mailto:` gets
+    verification here — other schemes are surfaced as parse_error so
+    the operator sees them."""
+    raw = raw.strip()
+    if not raw.lower().startswith("mailto:"):
+        return None, None
+    addr = raw[len("mailto:"):]
+    if "@" not in addr:
+        return "mailto", None
+    _, host = addr.rsplit("@", 1)
+    # rua supports `!<size>` suffix (RFC 7489 §6.2) — strip it.
+    host = host.split("!", 1)[0].strip().rstrip(".")
+    return "mailto", host.lower() if host else None
+
+
+def evaluate_dmarc_reporting(domain: str,
+                             rua: str | None = None,
+                             ruf: str | None = None) -> dict:
+    """RFC 7489 §7.1 External Destination Verification.
+
+    For each rua/ruf mailto: destination whose host domain differs from
+    the DMARC-record's domain, query the verification TXT at
+    `<record-domain>._report._dmarc.<destination-domain>`. Presence of
+    a `v=DMARC1` TXT is opt-in; anything else means mail receivers
+    will refuse to send reports there.
+
+    Returns `{"destinations": [...]}`. Each entry:
+      - `tag`: "rua" | "ruf"
+      - `raw`: original URI as published in the DMARC record
+      - `domain`: extracted host (may be None on parse error)
+      - `external`: True if host != checked domain
+      - `verified`: True | False | None (None ⇒ unretrievable)
+      - `unretrievable`: True if verification query failed transport
+      - `parse_error`: True on unparseable / non-mailto: URIs
+    """
+    dest: list[dict] = []
+    checked = domain.lower().rstrip(".")
+
+    for tag, val in (("rua", rua), ("ruf", ruf)):
+        if not val:
+            continue
+        for raw in val.split(","):
+            raw = raw.strip()
+            if not raw:
+                continue
+            scheme, host = _parse_dmarc_uri(raw)
+            if scheme is None or host is None:
+                dest.append({
+                    "tag": tag, "raw": raw, "domain": None,
+                    "external": False, "verified": None,
+                    "unretrievable": False, "parse_error": True,
+                })
+                continue
+            external = host != checked
+            entry: dict = {
+                "tag": tag, "raw": raw, "domain": host,
+                "external": external, "parse_error": False,
+                "unretrievable": False,
+            }
+            if not external:
+                entry["verified"] = True  # same-org — no probe needed
+                dest.append(entry)
+                continue
+            verify_name = f"{checked}._report._dmarc.{host}"
+            try:
+                txts = _txt_records(verify_name)
+            except TxtUnretrievable:
+                entry["verified"] = None
+                entry["unretrievable"] = True
+                dest.append(entry)
+                continue
+            entry["verified"] = any(
+                t.lower().lstrip().startswith("v=dmarc1") for t in txts)
+            dest.append(entry)
+
+    return {"destinations": dest}
+
+
 def evaluate_mta_sts(domain: str) -> dict:
     try:
         sts_records = _txt_records(f"_mta-sts.{domain}")

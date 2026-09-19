@@ -806,6 +806,42 @@ def _email(rep: Report, d: str, dkim_selectors):
                 "" if dmarc.get("rua") else "Without rua you get no visibility into who is sending as your domain.",
                 hardening=True)
 
+        # FN3: RFC 7489 §7.1 — external rua/ruf destinations must publish
+        # <checked>._report._dmarc.<dest> confirming opt-in, or mail
+        # receivers refuse to send reports. A domain that looks configured
+        # but has an unverified external destination is silently getting
+        # no reports.
+        if dmarc.get("rua") or dmarc.get("ruf"):
+            rpt = emailauth.evaluate_dmarc_reporting(
+                d, rua=dmarc.get("rua"), ruf=dmarc.get("ruf"))
+            rep.data["dmarc_reporting"] = rpt
+            for entry in rpt["destinations"]:
+                if not entry["external"]:
+                    continue  # same-org destinations need no verification
+                label = f"DMARC {entry['tag']} verification: {entry['domain']}"
+                if entry.get("parse_error"):
+                    rep.add(S, label, "WARN", f"unparseable: {entry['raw']}",
+                            "RFC 7489 §7.1 verification requires a mailto: "
+                            "URI; other schemes are not verified by this tool.",
+                            hardening=True)
+                elif entry["unretrievable"]:
+                    rep.add(S, label, "UNKNOWN",
+                            f"verification lookup unretrievable for "
+                            f"{entry['domain']}",
+                            "Could not query the ExtDestVerification record "
+                            "— NOT evidence the third party has declined.")
+                elif entry["verified"]:
+                    rep.add(S, label, "PASS",
+                            f"{entry['domain']} opted in to receive reports")
+                else:
+                    rep.add(S, label, "FAIL",
+                            f"{entry['domain']} has no ExtDestVerification "
+                            f"record",
+                            "RFC 7489 §7.1: without a `v=DMARC1` TXT at "
+                            f"{d}._report._dmarc.{entry['domain']}, mail "
+                            "receivers will not send aggregate reports to "
+                            "this address — reporting is silently broken.")
+
     if rep.data.get("null_mx"):
         rep.add(S, "Inbound mail checks", "INFO",
                 "Skipped — domain publishes a null MX (RFC 7505)",
