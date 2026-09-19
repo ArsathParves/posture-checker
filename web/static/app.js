@@ -251,14 +251,22 @@ function renderSection(name, findings, elapsedMs) {
 
 function renderGrades(grades) {
   const gradeEl = headerEl.querySelector(".header-grade");
-  let gradeText = "Overall posture: " + grades.overall +
+  // B6: "—" is the not-gradeable sentinel — surface it as the
+  // descriptive phrase, not the em-dash, so a reader sees "no data
+  // reached grading", not a mysterious punctuation mark.
+  const overallText = grades.overall === "—" ? "Not gradeable" : grades.overall;
+  let gradeText = "Overall posture: " + overallText +
     (grades.provisional ? "  (provisional)" : "");
   if (grades.correctness_grade && grades.correctness_grade !== "—")
     gradeText += "   ·   Correctness: " + grades.correctness_grade;
   if (grades.hardening_grade && grades.hardening_grade !== "—")
     gradeText += "   ·   Hardening: " + grades.hardening_grade;
   gradeEl.textContent = gradeText;
-  gradeEl.className = "header-grade " + grades.overall;
+  // Route the "—" band to a stable, valid CSS class name — a raw
+  // em-dash in a class list is technically valid CSS but reads as noise
+  // in devtools and would collide if any stylesheet ever targets it.
+  gradeEl.className = "header-grade " +
+    (grades.overall === "—" ? "not-gradeable" : grades.overall);
 
   for (const [name, [band]] of Object.entries(grades.sections || {})) {
     const el = sectionsEl.querySelector(`.section[data-section="${cssEscape(name)}"]`);

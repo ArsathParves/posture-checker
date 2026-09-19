@@ -117,7 +117,14 @@ def render(rep, show_info=True, as_json=False, strict=False):
     header = Text()
     header.append(f"{name}\n", style="bold white")
     header.append("Overall posture: ", style="dim")
-    header.append(f"{g['overall']}", style=GRADE_COLOR[g["overall"]])
+    # B6: "—" is the not-gradeable sentinel produced when a run had
+    # zero scored findings (network was broken, no data reached the
+    # grade function). Render it as the descriptive phrase so a reader
+    # sees "no data" rather than an ambiguous em-dash.
+    if g["overall"] == "—":
+        header.append("Not gradeable", style="dim")
+    else:
+        header.append(f"{g['overall']}", style=GRADE_COLOR[g["overall"]])
     if g.get("correctness_grade") and g["correctness_grade"] != "—":
         header.append("    Correctness: ", style="dim")
         header.append(f"{g['correctness_grade']}",

@@ -1386,6 +1386,24 @@ def grade(rep: Report, strict: bool = False) -> dict:
     unknowns = [f.section for f in rep.findings if f.status == "UNKNOWN"]
     provisional = bool(ungraded or unknowns or rep.degraded)
 
+    # B6: when there is nothing to grade — every scored bucket is empty
+    # — `overall` must render as "Not gradeable" ("—"), not fall
+    # through to the worst/avg computation which lands on "A" via
+    # `default=0` on `max([])`. A confident letter over zero data
+    # collapses "unretrievable" into "posture looks great" and
+    # violates rule 1. The `provisional` flag stays True so downstream
+    # renderers keep treating the run as soft. Correctness/hardening
+    # already return "—" here — this line propagates that to overall.
+    scored_findings = [f for f in rep.findings if f.is_scored]
+    if not scored_findings:
+        return {"sections": out, "overall": "—",
+                "correctness_grade": "—",
+                "hardening_grade": "—",
+                "hardening_gaps": [],
+                "provisional": True,
+                "ungraded_sections": ungraded,
+                "unknown_in": sorted(set(unknowns))}
+
     # L2: name the un-adopted optional features driving the hardening
     # grade. A bare "Hardening: C" letter is opaque; downstream renderers
     # use this list to caption "no MTA-STS, no TLS-RPT" so the letter is

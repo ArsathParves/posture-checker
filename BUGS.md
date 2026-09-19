@@ -105,11 +105,21 @@ an untested fix cycle regresses faster than it progresses.
   **Acceptance:** the displayed overall is derivable from displayed section
   grades, or the UI explains the two axes explicitly.
 
-- [ ] **B6. Fully-degraded run still shows a confident letter grade.**
+- [x] **B6. Fully-degraded run still shows a confident letter grade.** ✅ DONE
   If every check returns UNKNOWN, no findings are scored, `_grade_set`
   returns `"—"`, and overall falls through to a stale worst/avg computation.
   A meaningless grade renders identically to a real one.
   **Acceptance:** zero scored findings produces "Not gradeable", never a letter.
+  **Post-impl:** `grade()` short-circuits at the "no scored findings"
+  case and returns `overall="—"` with `provisional=True`, before the
+  worst/avg fallback that was landing on "A" via `default=0` on
+  `max([])`. CLI header (`posture/cli.py`) and web renderer
+  (`web/static/app.js`) both surface `"—"` as the descriptive phrase
+  "Not gradeable" so the user reads "no data reached grading" rather
+  than an ambiguous em-dash. Pinned by
+  `tests/test_grade_not_gradeable_when_empty.py` (7 cases: empty
+  report, UNKNOWN-only, INFO-only, sub-grades unchanged, single-PASS
+  still A, single-FAIL still a letter, CLI text renders the phrase).
 
 - [x] **B7. Cache poisoning across users (web).** ✅ DONE
   `RESULT_CACHE` is keyed by domain only and shared across all visitors. A
@@ -394,7 +404,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B3 | DONE | EPP status parsing widened per RFC 5731 §2.3. `_registration` now surfaces `clientHold`/`serverHold` as `Registry hold` (FAIL — domain non-resolving at registry), `redemptionPeriod`/`pendingDelete` as `Registry lifecycle` (FAIL — grace window before drop), and `pendingTransfer` as `Registry transfer state` (WARN — potential unauthorised transfer). Each bucket surfaces independently so hold state cannot be masked by a transfer-lock PASS. Pinned by `tests/test_epp_status_widening.py` (8 cases). |
 | B4 | DONE (via AUDIT L4 + T1) | Section-exception isolation and rule-1 preservation on the DNSSEC path pinned by `tests/test_dnssec_probe_unretrievable.py` and `tests/test_checks_run_orchestration.py::test_section_exception_becomes_UNKNOWN_downstream_still_runs`. |
 | B5 | PARTIAL (via AUDIT G1/L2) | Correctness/hardening split is now surfaced in both CLI (`tests/test_grade_split_surfaced.py`) and the hardening-gaps caption (`tests/test_hardening_caption.py`). Per-section-grade vs overall reconciliation is not yet explained in-UI — deferred UX. |
-| B6 | OPEN | Fully-degraded run still emits a letter grade. `provisional` is set, but no "Not gradeable" band. Follow-up. |
+| B6 | DONE | `grade()` short-circuits to `overall="—"` when zero findings are scored, before the worst/avg fallback that was landing on "A". CLI header and web renderer surface `"—"` as the descriptive phrase "Not gradeable". Pinned by `tests/test_grade_not_gradeable_when_empty.py`. |
 | B7 | DONE | `_run_job` now gates `_cache_result` on a positive `{"event": "environment", "safe": True}` marker in `job.events`. Degraded-environment runs and runs missing the marker are never cached, closing the cross-user staleness gap. LRU bound + TTL from AUDIT F4/P6 unchanged. Pinned by `tests/test_cache_env_degradation_gate.py`. |
 | B8 | PARTIAL (via AUDIT S7) | Per-connection SSE ceiling shipped (`tests/test_web_sse_timeout.py`, `SSE_MAX_STREAM_SECONDS = 120`). A global per-check deadline that bounds `run_streaming` itself is a separate follow-up. |
 
