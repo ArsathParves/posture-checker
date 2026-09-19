@@ -241,12 +241,17 @@ an untested fix cycle regresses faster than it progresses.
   lie) for nonexistent names, or that SOA minimum governs negative caching
   sanely.
 
-- [ ] **B29. Records read from recursive resolvers, presented as the domain's
-  records.** Everything except the per-NS SOA probe comes from public
-  resolvers — the *cached* view, possibly geo-steered. v0.5 added an
-  authoritative-vs-cached cross-check for A/AAAA only; MX, TXT, CAA, NS are
-  never cross-checked. Primary reads should come from authoritative, with
-  the resolver used as comparison.
+- [x] **B29. Records read from recursive resolvers, presented as the domain's
+  records.** ✅ DONE (parity leg)
+  `authoritative_vs_cached` now iterates over A, AAAA, **MX, TXT, CAA, NS**
+  so migration drift on mail routing (MX), email-auth (TXT / SPF), CA
+  policy (CAA) and delegation (NS) all surface via
+  `Authoritative vs cached view` WARN. Pinned by
+  `tests/test_authoritative_vs_cached_extended.py` (7 cases: per-type
+  disagreement, happy path, structural per-rdtype record entries,
+  multi-type disagreement). Note: this closes the parity-check leg;
+  the broader "primary reads from authoritative" refactor remains a
+  separate future rewrite.
 
 - [ ] **B30. TLS/certificate posture missing entirely.**
   Cert expiry, chain validity, TLS version, HSTS, and whether the served
@@ -397,7 +402,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B26 | OPEN | Authoritative NS's own TCP/53 support — no check. |
 | B27 | OPEN | EDNS compliance / DNS cookies (RFC 7873) — no check. |
 | B28 | OPEN | Negative-answer correctness — no check. |
-| B29 | PARTIAL (via AUDIT D5/FN5) | `authoritative_vs_cached` cross-checks A/AAAA. MX/TXT/CAA/NS cross-checks remain unimplemented. |
+| B29 | DONE (parity leg) | `authoritative_vs_cached` extended to MX/TXT/CAA/NS. Pinned by `tests/test_authoritative_vs_cached_extended.py` (7 cases). The broader "primary reads from authoritative, resolver as comparison" refactor is a separate future item. |
 | B30 | OPEN | TLS/cert posture — no check. |
 
 ### P3 — Regional / bias / validation

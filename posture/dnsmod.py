@@ -576,7 +576,11 @@ def authoritative_vs_cached(domain: str, ns_map: dict) -> dict:
 
     name = dns.name.from_text(domain)
     disagreements = []
-    for rdtype in ("A", "AAAA"):
+    # B29: extend parity check beyond A/AAAA to MX (mail routing drift),
+    # TXT (SPF/DKIM/DMARC drift), CAA (CA policy drift), NS (delegation
+    # drift). Each rdtype uses the same `to_text()` shape on both legs
+    # so set-equality is a valid comparison.
+    for rdtype in ("A", "AAAA", "MX", "TXT", "CAA", "NS"):
         cached = query(domain, rdtype)
         cached_set = set(cached.get("records", [])) if cached.get("ok") else set()
         try:

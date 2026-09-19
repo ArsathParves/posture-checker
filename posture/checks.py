@@ -837,8 +837,8 @@ def _records(rep: Report, d: str):
         if av.get("checked"):
             if av["agree"]:
                 rep.add(S, "Authoritative vs cached view", "PASS",
-                        "A/AAAA records match between the authoritative nameserver "
-                        "and public resolvers")
+                        "A/AAAA/MX/TXT/CAA/NS records match between the "
+                        "authoritative nameserver and public resolvers")
             else:
                 rep.add(S, "Authoritative vs cached view", "WARN",
                         f"Mismatch on: {', '.join(av['disagreements'])}",
