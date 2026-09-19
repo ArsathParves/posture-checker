@@ -261,15 +261,50 @@ def _registration(rep: Report, d: str):
 
     statuses = [s.lower() for s in p["status"]]
     # ROOT CAUSE PRINCIPLE (CLAUDE.md): EPP defines a full status-code set
-    # (clientTransferProhibited, serverTransferProhibited, and their client/
-    # server-side Update/Delete cousins). A "transfer lock" claim should
-    # read the full EPP set — reading only `transferProhibited` is the
-    # shortcut. Widen this to the complete EPP status set as it becomes
-    # relevant to a finding; today only transfer-prohibited is surfaced.
+    # per RFC 5731 §2.3. Reading only `transferProhibited` was the shortcut
+    # closed by B3 — three additional buckets are product-visible for a
+    # BFSI domain audit:
+    #   * hold states       → non-resolving domain (FAIL, own finding)
+    #   * lifecycle states  → about-to-be-dropped (FAIL, own finding)
+    #   * transfer state    → in-flight transfer (WARN, own finding)
+    # Each bucket surfaces independently — hold state MUST NOT be masked
+    # by a transfer-lock PASS. The status set is normalised to lowercase
+    # once above and matched by substring so registries that emit either
+    # camelCase (`clientHold`) or space-separated (`client hold`) resolve
+    # to the same detection.
     lock = any("transfer prohibited" in s or "transferprohibited" in s for s in statuses)
     rep.add(S, "Transfer lock", "PASS" if lock else "WARN",
             ", ".join(p["status"]) or "no status codes returned",
             "" if lock else "Without a transfer lock the domain is easier to hijack.")
+
+    hold_hits = [s for s in p["status"]
+                 if "clienthold" in s.lower() or "serverhold" in s.lower()
+                 or "client hold" in s.lower() or "server hold" in s.lower()]
+    if hold_hits:
+        rep.add(S, "Registry hold", "FAIL", ", ".join(hold_hits),
+                "Registry has removed the domain from DNS delegation "
+                "(clientHold/serverHold). The domain will not resolve "
+                "for anyone until the hold is lifted.")
+
+    lifecycle_hits = [s for s in p["status"]
+                      if "redemptionperiod" in s.lower()
+                      or "redemption period" in s.lower()
+                      or "pendingdelete" in s.lower()
+                      or "pending delete" in s.lower()]
+    if lifecycle_hits:
+        rep.add(S, "Registry lifecycle", "FAIL", ", ".join(lifecycle_hits),
+                "Domain has been deleted at the registry and is inside "
+                "the grace window before it is dropped and becomes "
+                "available for anyone to register. Renew immediately.")
+
+    transfer_hits = [s for s in p["status"]
+                     if "pendingtransfer" in s.lower()
+                     or "pending transfer" in s.lower()]
+    if transfer_hits:
+        rep.add(S, "Registry transfer state", "WARN", ", ".join(transfer_hits),
+                "A registrar transfer is in progress. Verify it was "
+                "authorised — an unauthorised pendingTransfer is a "
+                "hijack in progress.")
 
     if p["redacted"] or not p["registrar"]:
         rep.add(S, "Registrant data", "INFO", "Privacy-protected / redacted",
