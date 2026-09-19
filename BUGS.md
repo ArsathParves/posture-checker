@@ -400,7 +400,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B32 | DONE (via AUDIT FN2) | `tests/test_dkim_selector_coverage.py` pins the India-region additions (Netcore, Pepipost, Zeptomail, Kaleyra, Gupshup) plus the six FN2 ESP entries. |
 | B33 | PARTIAL (via AUDIT T4) | `tests/test_selftest_check_environment.py` pins the six-key return-shape contract and fault-injection semantics. Trigger-happy (single-probe interception) is intentional — see the "partial interception still flags intercepted" test. SPOF control resolver / UDP-fragmentation blind spots remain. |
 | B34 | DONE (via AUDIT D1) | `tests/test_query_cache.py` and `tests/test_query_cache_lru.py` pin TTL + LRU. |
-| B35 | OPEN | AD-bit probe still hits `8.8.8.8` singleton. Failover is a small follow-up. |
+| B35 | DONE — BUGS.md was stale | AD-bit probe already iterates `PUBLIC_RESOLVERS = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]` and continues on failure (`dnsmod.dnssec_status` line ~446). Pinned by `tests/test_dnssec_ad_fallback.py` (3 cases: fallback on primary failure, all-fail → inconclusive, SERVFAIL → `ad_authenticated=False`). Stale docstring on line 328 named 8.8.8.8 as a singleton — fixed. |
 | B36 | PARTIAL | CLAUDE.md rule 7 (vendor neutrality) is doctrine; remediation copy has been re-worded in-place but a data-model-level "general fix first, vendor secondary" restructure is still open. |
 | B37 | PARTIAL | Consensus reads via `parent_delegation` (D2), authoritative cross-check for A/AAAA (D5), per-run environment self-test (rule 5). Cross-resolver consensus for TXT/DNSKEY and confidence intervals remain unbuilt. |
 

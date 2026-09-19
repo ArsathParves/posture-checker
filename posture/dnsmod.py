@@ -325,9 +325,13 @@ def dnssec_status(domain: str) -> dict:
          (this is the link that anchors the zone into the global chain --
          a stale/wrong DS here means the zone is broken for every validating
          resolver, even though its self-signature is fine).
-      3. A validating resolver (8.8.8.8) sets the AD (Authenticated Data)
-         flag when asked without CD -- an independent confirmation that the
-         chain to root actually resolves.
+      3. A validating resolver from `PUBLIC_RESOLVERS` (Cloudflare 1.1.1.1,
+         Google 8.8.8.8, Quad9 9.9.9.9 — tried in order until one responds)
+         sets the AD (Authenticated Data) flag when asked without CD -- an
+         independent confirmation that the chain to root actually resolves.
+         The failover across resolvers means a transient outage at any
+         single resolver does not degrade the DNSSEC verdict to
+         inconclusive; see `tests/test_dnssec_ad_fallback.py` (B35).
 
     The old implementation only did (1) and reported "validating", which was
     misleading: a zone can self-sign perfectly and still be completely broken
