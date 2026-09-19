@@ -235,6 +235,10 @@ def parent_delegation(domain: str) -> dict:
     would produce a false 'delegation mismatch' FAIL. Parent-side delegation
     is the correct source of truth.
 
+    ROOT CAUSE PRINCIPLE (CLAUDE.md): the parent zone's actual NS delegation
+    is the source of truth for delegation questions; RDAP's nameserver list
+    is the shortcut. When they disagree, trust the parent.
+
     Queries up to `_PARENT_QUERY_MAX` parent NSes in parallel. When they all
     agree, `consensus=True` and the shape is backward-compatible. When they
     disagree, `consensus=False` and `views` names the disagreeing hosts so
@@ -328,6 +332,11 @@ def dnssec_status(domain: str) -> dict:
     The old implementation only did (1) and reported "validating", which was
     misleading: a zone can self-sign perfectly and still be completely broken
     at the parent boundary.
+
+    ROOT CAUSE PRINCIPLE (CLAUDE.md): the DNSKEY self-signature is the
+    shortcut; full DS→DNSKEY→chain-to-root validation is the real source
+    of truth. All three signals above must agree before we emit
+    "validating"; any one broken → state = "broken", never PASS.
     """
     out: dict[str, Any] = {
         "ds": False, "dnskey": False, "rrsig": False,
@@ -546,6 +555,11 @@ def authoritative_vs_cached(domain: str, ns_map: dict) -> dict:
     cached view. That can lag the zone or differ under split-horizon / geo
     steering. A disagreement is itself a useful finding: propagation lag,
     inconsistent nameservers, or geo-targeted answers.
+
+    ROOT CAUSE PRINCIPLE (CLAUDE.md): one recursive resolver's cached
+    answer is the shortcut; consensus across resolvers plus an authoritative
+    read is the source of truth. This function is the authoritative-read
+    leg; the "consensus across resolvers" leg lives in parent_delegation.
     """
     out: dict[str, Any] = {"checked": False, "agree": None, "records": {}}
     ns_ip = None

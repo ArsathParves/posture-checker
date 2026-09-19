@@ -11,7 +11,14 @@ LOOKUP_MECHANISMS = {"include", "a", "mx", "ptr", "exists"}
 
 
 class TxtUnretrievable(Exception):
-    """TXT data could not be retrieved. NOT the same as the record being absent."""
+    """TXT data could not be retrieved. NOT the same as the record being absent.
+
+    ROOT CAUSE PRINCIPLE (CLAUDE.md rule 1): three states — not-applicable /
+    unretrievable / broken — must never collapse into each other. This
+    exception is how the wire layer signals "unretrievable" so SPF / DKIM /
+    DMARC / MTA-STS / TLS-RPT callers can propagate UNKNOWN cleanly instead
+    of reporting `absent` (which is `broken`).
+    """
 
 # DKIM has no discoverable selector list in DNS — we can only probe known ones.
 # Result must always be labelled "not found under common selectors".

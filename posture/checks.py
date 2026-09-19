@@ -37,6 +37,11 @@ def _is_large_anycast_operator(asn: int | None, org_string: str | None) -> bool:
     brand-string set — this covers operators whose ASN has not yet been
     pinned into ``LARGE_ANYCAST_ASNS`` but whose org name Team Cymru
     returns in a recognisable form.
+
+    ROOT CAUSE PRINCIPLE (CLAUDE.md): ASN is the protocol source of truth
+    for network identity; the brand-string set is the shortcut. Do not
+    invert this order. A brand-first classifier is what mis-graded
+    vergecloud.com as "1 operator = SPOF" before C4.
     """
     if asn is not None and asn in LARGE_ANYCAST_ASNS:
         return True
@@ -255,6 +260,12 @@ def _registration(rep: Report, d: str):
             rep.add(S, "Expiry", "PASS", f"{expiry[:10]}")
 
     statuses = [s.lower() for s in p["status"]]
+    # ROOT CAUSE PRINCIPLE (CLAUDE.md): EPP defines a full status-code set
+    # (clientTransferProhibited, serverTransferProhibited, and their client/
+    # server-side Update/Delete cousins). A "transfer lock" claim should
+    # read the full EPP set — reading only `transferProhibited` is the
+    # shortcut. Widen this to the complete EPP status set as it becomes
+    # relevant to a finding; today only transfer-prohibited is surfaced.
     lock = any("transfer prohibited" in s or "transferprohibited" in s for s in statuses)
     rep.add(S, "Transfer lock", "PASS" if lock else "WARN",
             ", ".join(p["status"]) or "no status codes returned",
