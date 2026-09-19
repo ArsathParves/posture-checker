@@ -27,7 +27,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from slowapi import Limiter
@@ -36,6 +36,10 @@ from slowapi.errors import RateLimitExceeded
 from posture.checks import grade, run_streaming
 from posture.core import normalize_domain
 from posture.logging import get_logger
+from posture.metrics import (
+    CHECKS_STARTED, CHECKS_COMPLETED, CHECKS_FAILED, CHECKS_CACHE_HITS,
+    RATE_LIMIT_REJECTED, CHECK_DURATION, render_prometheus_text,
+)
 from posture.selftest import check_environment
 
 log = get_logger("posture.web")
@@ -255,6 +259,7 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
     log.warning("rate limit rejected",
                 extra={"peer": _rate_limit_key(request),
                        "path": request.url.path})
+    RATE_LIMIT_REJECTED.inc()
     return JSONResponse(status_code=429,
                         content={"error": "rate_limited",
                                  "detail": "Too many checks from this IP. "
@@ -373,6 +378,7 @@ async def _run_job(job: Job):
             log.error("check failed",
                       extra={"check_id": job.check_id, "domain": job.domain,
                              "error": job.error})
+            CHECKS_FAILED.inc()
         finally:
             job.done = True
             job._wake.set()  # Final notification
@@ -384,6 +390,8 @@ async def _run_job(job: Job):
                          extra={"check_id": job.check_id, "domain": job.domain,
                                 "duration_s": duration_s,
                                 "events": len(job.events)})
+                CHECKS_COMPLETED.inc()
+                CHECK_DURATION.observe(duration_s)
 
             # Schedule GC of the job itself (only if loop is still running)
             try:
@@ -414,6 +422,24 @@ async def healthz():
     return JSONResponse(status_code=200 if ok else 503, content=payload)
 
 
+@app.get("/metrics")
+async def metrics():
+    """Prometheus scrape target (exposition format 0.0.4, text).
+
+    Unauthenticated by design — Prometheus scrapers don't do
+    per-target auth by default, and network-layer allow-listing
+    (firewall / reverse-proxy) is the standard control. All
+    metrics here are aggregate counters + a duration histogram;
+    no per-domain labels, so scraping this endpoint leaks nothing
+    about who has been checked.
+    """
+    body = render_prometheus_text()
+    return Response(
+        content=body,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
 @app.post("/api/check")
 @limiter.limit("10/minute")
 async def create_check(request: Request, body: CheckRequest):
@@ -431,6 +457,7 @@ async def create_check(request: Request, body: CheckRequest):
                          if e.get("event") == "complete"), None)
         log.info("check served from cache",
                  extra={"check_id": prior.check_id, "domain": domain})
+        CHECKS_CACHE_HITS.inc()
         return {"check_id": prior.check_id, "cached": True,
                 "domain": prior.domain,
                 "result": complete}
@@ -443,6 +470,7 @@ async def create_check(request: Request, body: CheckRequest):
     log.info("check queued",
              extra={"check_id": check_id, "domain": domain,
                     "dkim_selectors": len(job.dkim_selectors)})
+    CHECKS_STARTED.inc()
     return {"check_id": check_id, "cached": False, "domain": domain}
 
 
