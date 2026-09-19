@@ -20,10 +20,15 @@ COMMON_SELECTORS = [
     # Generic
     "default", "selector1", "selector2", "k1", "k2", "k3",
     "mail", "dkim", "s1", "s2", "smtp", "sig1",
+    "s2048",  # Yahoo/AOL legacy + generic 2048-bit key marker (FN2)
     # Western ESPs
     "google", "mandrill", "everlytickey1", "mailjet", "sendgrid",
-    "zoho", "zmail", "pm", "litesrv", "protonmail", "amazonses",
+    "zoho", "zmail", "pm", "postmarkapp",  # Postmark ships both `pm` and `postmarkapp` (FN2)
+    "litesrv", "protonmail", "amazonses",
     "hs1", "hs2", "mimecast20220101",
+    "ml1", "ml2",  # MailerLite (FN2)
+    "mxvault",     # Mailgun shared-IP selector (FN2)
+    "salesforce",  # Salesforce marketing cloud (FN2)
     # India-region ESPs (BFSI focus)
     "netcore", "pepipost", "zeptomail", "kaleyra", "gupshup",
 ]
