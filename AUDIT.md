@@ -162,7 +162,7 @@ The single most damaging correctness item is C4 (hardcoded anycast brand list in
 - **P1** — ✅ **DONE (already implemented — pointer to D1)** — Same bug, same fix — see D1 above.
 - **P2** — DKIM selector doubling (C3).
 - **P3** — MTA-STS doubling (C2).
-- **P4** — Per-NS probes are sequential in `dnsmod.per_ns_probe` — parallelise with a bounded pool.
+- **P4** — ✅ **DONE** — `dnsmod.probe_each_ns` iterated over the NS map serially — a domain with 6 slow-to-respond NSes had a worst-case wall time of 6 × TIMEOUT (~24s). Even the common case (one lame NS in the set) blocked every subsequent probe. Fix: extracted the per-NS body into a raise-free `_probe_one_ns(domain, host, ips)` helper, then submit all probes to a bounded `ThreadPoolExecutor` (`_PER_NS_PROBE_MAX = 8`, same rationale as `_PARENT_QUERY_MAX` — cover common 4-NS/6-NS domains in one wave, don't over-fan on anycast pools). Wall time now scales with the slowest NS + fan-out overhead, not the sum. Return shape is byte-identical to the sequential version so downstream (`checks.py` emit path, JSON output, cached SSE payloads) needed no changes. Guarded by `tests/test_per_ns_probe_parallel.py` (5 tests: 6 × 0.4s stalls complete in <1.5s wall, return-shape stability, TIMEOUT bucketing preserved, no-address NS still reported, E6 IPv6-fallback regression pin).
 - **P5** — RDAP right-to-left label walk retries the bootstrap fetch on every call; cache the parsed bootstrap for the process lifetime with a 24h TTL.
 - **P6** — ✅ **DONE (pointer to F4)** — Same bug, same fix — see F4 above. `RESULT_CACHE` is now an LRU-bounded `OrderedDict`.
 

@@ -139,37 +139,66 @@ def get_ns_and_ips(domain: str) -> dict:
     return {"ok": True, "ns": out, "ttl": res.get("ttl")}
 
 
+# P4: fan-out for `probe_each_ns`. Cap chosen for the same reason as
+# `_PARENT_QUERY_MAX` — don't over-fan on TLDs / anycast pools with
+# double-digit NS counts, but always cover the common 4–6-NS domain in
+# a single wave. The bound is per-call, not global.
+_PER_NS_PROBE_MAX = 8
+
+
+def _probe_one_ns(domain: str, host: str, ips: dict) -> tuple[str, dict]:
+    """Query SOA at one NS. Returns `(host, result_dict)`. Never raises —
+    every failure mode is bucketed into the result dict's `error` field
+    so the parallel wrapper can iterate cleanly."""
+    # E6: fall back to IPv6 when there is no A record. `dns.query.udp`
+    # accepts an IPv6 literal directly, so an AAAA-only NS is fully
+    # probeable — reporting it as "no_A_record" would collapse a
+    # reachable-but-v6-only NS into a FAIL (rule 1 violation).
+    ip = (ips.get("ipv4") or [None])[0] or (ips.get("ipv6") or [None])[0]
+    if not ip:
+        return host, {"reachable": False, "error": "no_address",
+                      "authoritative": None, "serial": None, "rtt_ms": None}
+    try:
+        q = dns.message.make_query(domain, "SOA")
+        t0 = time.perf_counter()
+        resp = dns.query.udp(q, ip, timeout=TIMEOUT)
+        rtt = (time.perf_counter() - t0) * 1000
+        aa = bool(resp.flags & dns.flags.AA)
+        serial = None
+        for rrset in resp.answer:
+            if rrset.rdtype == dns.rdatatype.SOA:
+                serial = rrset[0].serial
+        return host, {"reachable": True, "authoritative": aa, "serial": serial,
+                      "rtt_ms": round(rtt, 1), "ip": ip, "error": None}
+    except dns.exception.Timeout:
+        return host, {"reachable": False, "error": "TIMEOUT", "ip": ip,
+                      "authoritative": None, "serial": None, "rtt_ms": None}
+    except Exception as e:
+        return host, {"reachable": False, "error": type(e).__name__, "ip": ip,
+                      "authoritative": None, "serial": None, "rtt_ms": None}
+
+
 def probe_each_ns(domain: str, ns_map: dict) -> dict:
-    """Query SOA directly at each NS. Detects lame delegation + serial drift."""
+    """Query SOA directly at each NS. Detects lame delegation + serial drift.
+
+    Probes run in parallel across a bounded ThreadPoolExecutor so a
+    slow (or unreachable-then-TIMEOUT) NS in the set doesn't serialise
+    the whole check. Wall-clock scales with the slowest NS + fan-out
+    overhead, not with the sum. Result shape is identical to the
+    sequential version — same keys, same error strings — so the emit
+    layer in checks.py and any downstream JSON consumer see no change.
+    """
+    if not ns_map:
+        return {}
+    from concurrent.futures import ThreadPoolExecutor
+    workers = min(_PER_NS_PROBE_MAX, max(1, len(ns_map)))
     results: dict[str, dict] = {}
-    for host, ips in ns_map.items():
-        # E6: fall back to IPv6 when there is no A record. `dns.query.udp`
-        # accepts an IPv6 literal directly, so an AAAA-only NS is fully
-        # probeable — reporting it as "no_A_record" would collapse a
-        # reachable-but-v6-only NS into a FAIL (rule 1 violation).
-        ip = (ips.get("ipv4") or [None])[0] or (ips.get("ipv6") or [None])[0]
-        if not ip:
-            results[host] = {"reachable": False, "error": "no_address",
-                             "authoritative": None, "serial": None, "rtt_ms": None}
-            continue
-        try:
-            q = dns.message.make_query(domain, "SOA")
-            t0 = time.perf_counter()
-            resp = dns.query.udp(q, ip, timeout=TIMEOUT)
-            rtt = (time.perf_counter() - t0) * 1000
-            aa = bool(resp.flags & dns.flags.AA)
-            serial = None
-            for rrset in resp.answer:
-                if rrset.rdtype == dns.rdatatype.SOA:
-                    serial = rrset[0].serial
-            results[host] = {"reachable": True, "authoritative": aa, "serial": serial,
-                             "rtt_ms": round(rtt, 1), "ip": ip, "error": None}
-        except dns.exception.Timeout:
-            results[host] = {"reachable": False, "error": "TIMEOUT", "ip": ip,
-                             "authoritative": None, "serial": None, "rtt_ms": None}
-        except Exception as e:
-            results[host] = {"reachable": False, "error": type(e).__name__, "ip": ip,
-                             "authoritative": None, "serial": None, "rtt_ms": None}
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(_probe_one_ns, domain, host, ips)
+                   for host, ips in ns_map.items()]
+        for fut in futures:
+            host, res = fut.result()
+            results[host] = res
     return results
 
 
