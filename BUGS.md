@@ -149,11 +149,15 @@ an untested fix cycle regresses faster than it progresses.
   `mx` costs 1 lookup **plus** additional lookups for each MX host's A/AAAA
   record. The tool counts flat 1. Real over-limit records pass as compliant.
 
-- [ ] **B12. SPF dedup via `seen` set undercounts.**
-  The RFC counts DNS *lookups*, not distinct domains. Two different
-  `include:`s referencing the same target are two lookups; `seen` collapses
-  them. Combined with B10/B11 the count is unreliable in both directions —
-  undermining the one hard pass/fail check in email auth.
+- [x] **B12. SPF dedup via `seen` set undercounts.** ✅ DONE
+  `_count_spf_lookups` now uses per-path cycle detection: `seen` is a
+  frozenset copied at each recursion (`seen = seen | {domain}`) so a
+  shared dependency reached via two sibling branches contributes its
+  nested DNS-term lookups on BOTH branches, per RFC 7208 §4.6.4. Cycle
+  protection preserved by the existing `depth > 10` and `depth < 5`
+  guards. Pinned by `tests/test_spf_seen_perpath.py` (4 cases:
+  shared-dependency count, over-limit surfacing, direct cycle
+  termination, top-level repeat regression backstop).
 
 - [ ] **B13. SPF recursion depth guards are inconsistent.**
   Entry guard is `depth > 10`, recursion guard is `depth < 5`. Count and
@@ -380,7 +384,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B9 | DONE | Single-query path with TC-bit inspection + TCP retry lives in `dnsmod.query`. Pinned by `tests/test_query_cache.py` and `tests/test_query_cache_lru.py`; SPF-facing behaviour by `tests/test_txt_unretrievable_wider.py`. |
 | B10 | DONE | `tests/test_spf_counting.py::test_redirect_ignored_when_all_present` pins RFC 7208 §6.1. |
 | B11 | WITHDRAWN (AUDIT C5) | Audit premise misread §4.6.4. `mx` costs exactly 1. Pinned RFC-compliant by `tests/test_spf_counting.py::test_bare_mx_counts_as_one_per_rfc_7208_4_6_4` and `test_mx_with_target_counts_as_one_per_rfc_7208_4_6_4`. |
-| B12 | OPEN | Per-lookup vs per-distinct-domain counting not addressed. `_seen` still dedupes. |
+| B12 | DONE | `_count_spf_lookups` uses per-path `seen` (frozenset copy-on-add). Sibling branches count independently per RFC 7208 §4.6.4. Pinned by `tests/test_spf_seen_perpath.py` (4 cases). |
 | B13 | OPEN | SPF recursion depth guards not reconciled. Trace vs count divergence not pinned. |
 | B14 | OPEN | `sp` / `adkim` / `aspf` still parsed but not evaluated in grading. |
 | B15 | DONE (via AUDIT FP5) | `tests/test_caa_parent_walkup.py` pins the parent-label walk per RFC 8659 §3. |

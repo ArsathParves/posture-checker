@@ -79,10 +79,17 @@ def _count_spf_lookups(record: str, domain: str, depth=0, seen=None) -> tuple[in
     - §6.1: redirect= is ignored if a terminal 'all' mechanism is present.
     """
     if seen is None:
-        seen = set()
+        seen = frozenset()
     if depth > 10 or domain in seen:
         return 0, []
-    seen.add(domain)
+    # B12: cycle-detect per call chain, not globally. Copy-on-add
+    # (frozenset) so a shared dependency (`a → c` and `b → c`) is
+    # counted afresh in each branch — RFC 7208 §4.6.4 counts each
+    # DNS-term mechanism as one lookup per appearance, regardless of
+    # whether a sibling branch already visited the target. A global
+    # `seen` short-circuit undercounts and lets truly over-limit
+    # records grade PASS.
+    seen = seen | {domain}
 
     # Check if record has 'all' mechanism (RFC 7208 §6.1)
     has_all = any(term.lower().endswith("all") for term in record.split())
