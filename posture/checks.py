@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from datetime import datetime, timezone
 
 from . import dnsmod, emailauth
@@ -576,6 +577,25 @@ def _is_bogon_address(addr: str) -> bool:
     return False
 
 
+_CAA_LINE_RE = re.compile(r'^\s*(\d+)\s+([A-Za-z][A-Za-z0-9]*)\s+"(.*)"\s*$')
+
+
+def _parse_caa_record(line: str) -> tuple[int, str, str] | None:
+    """B16: parse a single CAA record's `<flags> <tag> "<value>"` wire
+    form (RFC 8659 §4.1). Returns (flags, tag_lowercased, value) or
+    None when the line does not match — malformed records are handled
+    by the caller (they surface as their own WARN finding, not as a
+    silent drop)."""
+    m = _CAA_LINE_RE.match(line)
+    if not m:
+        return None
+    try:
+        flags = int(m.group(1))
+    except ValueError:
+        return None
+    return flags, m.group(2).lower(), m.group(3)
+
+
 def _records(rep: Report, d: str):
     S = "Core records"
     a = dnsmod.query(d, "A")
@@ -646,6 +666,79 @@ def _records(rep: Report, d: str):
     if caa.get("records"):
         rep.add(S, "CAA record", "PASS", ", ".join(caa["records"]),
                 hardening=True)
+        # B16: parse each CAA record into (flags, tag, value) and
+        # surface distinct findings per RFC 8659 tag. Rule 1: this
+        # runs only on records that WERE retrieved; malformed lines
+        # get their own WARN so a SE can distinguish "no CAA" from
+        # "CAA but zone-file typo".
+        parsed: list[tuple[int, str, str]] = []
+        malformed: list[str] = []
+        for rec in caa["records"]:
+            p = _parse_caa_record(rec)
+            if p is None:
+                malformed.append(rec)
+            else:
+                parsed.append(p)
+
+        issue_nonwild = [v for _, t, v in parsed
+                         if t == "issue" and v.strip() != ";"]
+        issue_wild = [v for _, t, v in parsed
+                      if t == "issuewild" and v.strip() != ";"]
+        no_ca = any((t == "issue" and v.strip() == ";") for _, t, v in parsed)
+        iodefs = [v for _, t, v in parsed if t == "iodef"]
+
+        if issue_nonwild:
+            rep.add(S, "CAA issuers (non-wildcard)", "PASS",
+                    ", ".join(issue_nonwild),
+                    "Certificate authorities permitted to issue non-"
+                    "wildcard certificates for this domain (RFC 8659 "
+                    "§4.2 issue tag).",
+                    hardening=True)
+
+        if issue_wild:
+            rep.add(S, "CAA issuers (wildcard)", "PASS",
+                    ", ".join(issue_wild),
+                    "Certificate authorities permitted to issue wildcard "
+                    "certificates for this domain (RFC 8659 §4.3 "
+                    "issuewild tag). Overrides `issue` for `*.` names.",
+                    hardening=True)
+
+        if no_ca:
+            rep.add(S, "CAA no-issue lockdown", "PASS",
+                    'issue ";" — no CA may issue certificates',
+                    "RFC 8659 §4.2: `issue \";\"` explicitly forbids all "
+                    "CAs from issuing certificates for this domain. "
+                    "Deliberate hard lockdown.",
+                    hardening=True)
+
+        # iodef reporting is a hardening signal that only makes sense
+        # when there is actual issuance policy to report against. If
+        # the zone has only iodef and no issue/issuewild/no-ca, the
+        # policy is malformed in spirit — no CA restriction means
+        # nothing to report — but we still don't want to WARN on that
+        # nonsensical case; skip the finding entirely.
+        has_policy = bool(issue_nonwild or issue_wild or no_ca)
+        if has_policy:
+            if iodefs:
+                rep.add(S, "CAA iodef reporting", "PASS",
+                        ", ".join(iodefs),
+                        "CAA iodef endpoint receives reports of "
+                        "forbidden-issuance attempts — closes the CAA "
+                        "loop (RFC 8659 §4.4).",
+                        hardening=True)
+            else:
+                rep.add(S, "CAA iodef reporting", "WARN", "no iodef tag",
+                        "CAA policy has no iodef reporting endpoint; CAs "
+                        "cannot notify you when a forbidden issuance is "
+                        "attempted. Add `0 iodef \"mailto:...\"`.",
+                        hardening=True)
+
+        if malformed:
+            rep.add(S, "CAA malformed record", "WARN", ", ".join(malformed),
+                    "One or more CAA records do not match the RFC 8659 "
+                    "wire format `<flags> <tag> \"<value>\"`. Zone-file "
+                    "fix needed.",
+                    hardening=True)
     else:
         # RFC 8659 §3: a CA queries the FQDN's CAA, and if empty walks
         # up the tree until it finds a set (stopping short of the root).

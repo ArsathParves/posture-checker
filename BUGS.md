@@ -169,10 +169,15 @@ an untested fix cycle regresses faster than it progresses.
   CAs walk up the tree. A subdomain inheriting valid parent CAA is falsely
   reported "CAA: none WARN".
 
-- [ ] **B16. CAA content never parsed.**
-  No distinction between `issue`, `issuewild`, `iodef`. A domain with only an
-  `iodef` reporting record grades PASS identically to one with a strict
-  issuance policy. The `issue ";"` (no CA may issue) form is not recognised.
+- [x] **B16. CAA content never parsed.** ✅ DONE
+  Added `_parse_caa_record` regex helper (`checks.py`) and per-tag emission
+  in `_records`. Six new findings: `CAA issuers (non-wildcard)`,
+  `CAA issuers (wildcard)`, `CAA no-issue lockdown` (`0 issue ";"`),
+  `CAA iodef reporting` (PASS+hardening when present, WARN+hardening when
+  absent-but-policy-exists), `CAA malformed record` (WARN for unparseable
+  wire form). Pinned by `tests/test_caa_tag_semantics.py` (8 cases; iodef
+  hardening bucket, no-CA lockdown detail, malformed-doesn't-drag-valid,
+  non-regression when CAA absent).
 
 - [ ] **B17. `normalize_domain` accepts IP addresses.**
   `127.0.0.1` passes. The web layer rejects IPs but the core function does
@@ -371,7 +376,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B13 | OPEN | SPF recursion depth guards not reconciled. Trace vs count divergence not pinned. |
 | B14 | OPEN | `sp` / `adkim` / `aspf` still parsed but not evaluated in grading. |
 | B15 | DONE (via AUDIT FP5) | `tests/test_caa_parent_walkup.py` pins the parent-label walk per RFC 8659 §3. |
-| B16 | OPEN | CAA `issue` / `issuewild` / `iodef` distinction not parsed. `issue ";"` (no-CA form) not recognised. |
+| B16 | DONE | `_parse_caa_record` + per-tag emission in `_records`. Pinned by `tests/test_caa_tag_semantics.py` (8 cases: issue, issuewild, no-CA `;` lockdown, iodef PASS+hardening, iodef WARN+hardening, malformed WARN, non-regression). |
 | B17 | DONE | `tests/test_normalize_domain.py::TestIpRejection`, `tests/test_web_validation.py`, and `tests/test_validator_parity.py` (L3) pin IP rejection at both entry points. |
 | B18 | DONE | `tests/test_normalize_domain.py::TestBoundaryLengths` — 63/64-char label and 253/254-octet total-name pins (E1). |
 | B19 | DONE | Same file — TLD length rejection. |
