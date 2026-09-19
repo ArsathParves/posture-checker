@@ -35,7 +35,10 @@ from slowapi.errors import RateLimitExceeded
 
 from posture.checks import grade, run_streaming
 from posture.core import normalize_domain
+from posture.logging import get_logger
 from posture.selftest import check_environment
+
+log = get_logger("posture.web")
 
 # ---------------------------------------------------------------- config
 
@@ -249,6 +252,9 @@ app = _build_app()
 
 @app.exception_handler(RateLimitExceeded)
 async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    log.warning("rate limit rejected",
+                extra={"peer": _rate_limit_key(request),
+                       "path": request.url.path})
     return JSONResponse(status_code=429,
                         content={"error": "rate_limited",
                                  "detail": "Too many checks from this IP. "
@@ -356,19 +362,28 @@ async def _run_job(job: Job):
             job.events.append({"event": "error", "type": "server",
                                "message": job.error})
             job._event_version += 1
+            log.warning("check cancelled",
+                        extra={"check_id": job.check_id, "domain": job.domain})
             raise  # Re-raise so asyncio can handle cleanup
         except Exception as e:
             job.error = f"{type(e).__name__}: {e}"
             job.events.append({"event": "error", "type": "server",
                                "message": job.error})
             job._event_version += 1
+            log.error("check failed",
+                      extra={"check_id": job.check_id, "domain": job.domain,
+                             "error": job.error})
         finally:
             job.done = True
             job._wake.set()  # Final notification
 
-            # Cache successful runs by punycode domain for repeat visitors.
+            duration_s = round(time.time() - job.created_at, 3)
             if not job.error:
                 _cache_result(job, time.time() + CACHE_TTL_SECONDS)
+                log.info("check completed",
+                         extra={"check_id": job.check_id, "domain": job.domain,
+                                "duration_s": duration_s,
+                                "events": len(job.events)})
 
             # Schedule GC of the job itself (only if loop is still running)
             try:
@@ -414,6 +429,8 @@ async def create_check(request: Request, body: CheckRequest):
     if prior is not None:
         complete = next((e for e in prior.events
                          if e.get("event") == "complete"), None)
+        log.info("check served from cache",
+                 extra={"check_id": prior.check_id, "domain": domain})
         return {"check_id": prior.check_id, "cached": True,
                 "domain": prior.domain,
                 "result": complete}
@@ -423,6 +440,9 @@ async def create_check(request: Request, body: CheckRequest):
               dkim_selectors=body.dkim_selectors or [])
     JOBS[check_id] = job
     asyncio.create_task(_run_job(job))
+    log.info("check queued",
+             extra={"check_id": check_id, "domain": domain,
+                    "dkim_selectors": len(job.dkim_selectors)})
     return {"check_id": check_id, "cached": False, "domain": domain}
 
 
