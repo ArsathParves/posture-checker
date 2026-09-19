@@ -1,6 +1,7 @@
 """Orchestration: run modules, emit findings, grade."""
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime, timezone
 
 from . import dnsmod, emailauth
@@ -542,6 +543,39 @@ def _soa(rep: Report, d: str, ns_map: dict):
         rep.add(S, "Wildcard record", "PASS", "No wildcard detected")
 
 
+def _is_bogon_address(addr: str) -> bool:
+    """B22: True if `addr` is an IPv4/IPv6 address that should never
+    appear as the authoritative apex A/AAAA record for a public-
+    facing domain.
+
+    Uses `ipaddress`'s classification attributes rather than
+    hand-rolled CIDR lists: `is_private` covers RFC 1918, RFC 4193
+    ULA, and IPv4 loopback / link-local / broadcast in one shot;
+    `is_loopback`, `is_link_local`, `is_multicast`, `is_reserved`,
+    `is_unspecified` cover the rest. Documentation ranges
+    (192.0.2/24, 198.51.100/24, 203.0.113/24, 2001:db8::/32) fall
+    under `is_reserved` in stdlib. RFC 6598 shared-address space
+    (100.64/10) is not in stdlib's `is_private` on all Python
+    versions — check it explicitly.
+
+    Returns False on any parse error — a malformed record is a
+    separate problem for a separate finding (dnsmod already
+    filters syntactically invalid records upstream)."""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    if ip.is_private or ip.is_loopback or ip.is_link_local:
+        return True
+    if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+        return True
+    # RFC 6598 CGN block — not part of `is_private` on Py<3.13.
+    if isinstance(ip, ipaddress.IPv4Address):
+        if ip in ipaddress.IPv4Network("100.64.0.0/10"):
+            return True
+    return False
+
+
 def _records(rep: Report, d: str):
     S = "Core records"
     a = dnsmod.query(d, "A")
@@ -569,6 +603,26 @@ def _records(rep: Report, d: str):
             ", ".join(aaaa.get("records", [])) or "none",
             "" if aaaa.get("records") else "No IPv6 address — IPv6-only clients cannot reach the apex directly.",
             hardening=True)
+
+    # B22: bogon / private-space sanity. Apex A/AAAA pointing at
+    # RFC 1918, loopback, link-local, ULA, docrange, multicast, or
+    # CGN space is almost always a leak from an internal zone or a
+    # stale `/etc/hosts`-style copy-paste. FAIL, not WARN — a
+    # public client cannot route to any of these.
+    a_bogons = [addr for addr in (a.get("records") or [])
+                if _is_bogon_address(addr)]
+    if a_bogons:
+        rep.add(S, "A record bogon check", "FAIL", ", ".join(a_bogons),
+                "Apex A record points at private / reserved address space. "
+                "Public clients cannot route to this. Almost always a "
+                "leak from an internal zone or a stale /etc/hosts entry.")
+    aaaa_bogons = [addr for addr in (aaaa.get("records") or [])
+                   if _is_bogon_address(addr)]
+    if aaaa_bogons:
+        rep.add(S, "AAAA record bogon check", "FAIL", ", ".join(aaaa_bogons),
+                "Apex AAAA record points at private / reserved IPv6 space "
+                "(ULA, link-local, or documentation range). Public clients "
+                "cannot route to this.")
 
     # CNAME at apex is an RFC violation
     if cname.get("ok") and cname.get("records"):

@@ -382,7 +382,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 |---|---|---|
 | B20 | OPEN | Subdomain takeover / dangling records — no check. This is the highest-value P2 gap; a dedicated `posture/takeover.py` module + CRITICAL tier (T2) is a natural pairing. |
 | B21 | OPEN | MX validation (CNAME/IP-literal/dangling) — no check. |
-| B22 | OPEN | Bogon/private-space sanity — no check. |
+| B22 | DONE | Apex A/AAAA bogon check added to `checks._records`. `_is_bogon_address` uses stdlib `ipaddress` classification (`is_private`, `is_loopback`, `is_link_local`, `is_multicast`, `is_reserved`, `is_unspecified`) plus an explicit RFC 6598 CGN (`100.64/10`) fallback for Python <3.13. Emits `A record bogon check` / `AAAA record bogon check` at FAIL when the finding is non-empty; skipped entirely when the record is absent (rule 1 preserved). Pinned by `tests/test_bogon_private_space.py` (10 cases: RFC 1918, loopback, doc-range, mixed public+private, IPv6 ULA / link-local / doc-range, plus non-regression cases for public IPv4/IPv6 and empty-records). |
 | B23 | OPEN | Glue-record consistency — no check. |
 | B24 | OPEN | NSEC vs NSEC3 zone-walking exposure — no check. |
 | B25 | OPEN | CDS/CDNSKEY (RFC 7344/8078) — no check. |
