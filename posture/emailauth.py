@@ -102,24 +102,28 @@ def _count_spf_lookups(record: str, domain: str, depth=0, seen=None) -> tuple[in
             target = term.split(":", 1)[1]
             count += 1
             trace.append(f"include:{target}")
-            if depth < 5:
-                sub = get_spf(target)
-                if sub.get("record"):
-                    c, tr = _count_spf_lookups(sub["record"], target, depth + 1, seen)
-                    count += c
-                    trace.extend(f"  {x}" for x in tr)
+            # B13: recurse as far as the entry guard allows (`depth > 10`).
+            # The previous `depth < 5` gate silently truncated count and
+            # trace for real chains — a 10-deep include chain graded as
+            # 6 lookups and RFC-compliant when it was actually at the
+            # limit. Cycle protection is handled by the per-path `seen`
+            # frozenset (B12); runaway depth is bounded by `depth > 10`.
+            sub = get_spf(target)
+            if sub.get("record"):
+                c, tr = _count_spf_lookups(sub["record"], target, depth + 1, seen)
+                count += c
+                trace.extend(f"  {x}" for x in tr)
         elif t.startswith("redirect="):
             # RFC 7208 §6.1: redirect is ignored if 'all' is present
             if not has_all:
                 target = term.split("=", 1)[1]
                 count += 1
                 trace.append(f"redirect={target}")
-                if depth < 5:
-                    sub = get_spf(target)
-                    if sub.get("record"):
-                        c, tr = _count_spf_lookups(sub["record"], target, depth + 1, seen)
-                        count += c
-                        trace.extend(f"  {x}" for x in tr)
+                sub = get_spf(target)
+                if sub.get("record"):
+                    c, tr = _count_spf_lookups(sub["record"], target, depth + 1, seen)
+                    count += c
+                    trace.extend(f"  {x}" for x in tr)
         elif t == "mx" or t.startswith("mx:"):
             # RFC 7208 §4.6.4: mx counts as one DNS-term toward the 10-limit.
             # Nested A/AAAA lookups on MX targets have their own separate cap

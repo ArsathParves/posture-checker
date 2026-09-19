@@ -159,9 +159,13 @@ an untested fix cycle regresses faster than it progresses.
   shared-dependency count, over-limit surfacing, direct cycle
   termination, top-level repeat regression backstop).
 
-- [ ] **B13. SPF recursion depth guards are inconsistent.**
-  Entry guard is `depth > 10`, recursion guard is `depth < 5`. Count and
-  displayed trace can disagree; the trace under-represents what was counted.
+- [x] **B13. SPF recursion depth guards are inconsistent.** ✅ DONE
+  Removed the `depth < 5` recursion gate. `depth > 10` is now the ONLY
+  termination bound (aligned with RFC 7208 §4.6.4's 10-lookup limit).
+  Cycle protection is handled by the per-path `seen` frozenset (B12).
+  Pinned by `tests/test_spf_depth_guard_consistency.py` (5 cases: 10-
+  chain matches RFC count, 11-chain over-limit, trace matches count,
+  20-chain hard-cutoff termination, 3-chain regression backstop).
 
 - [x] **B14. DMARC `sp=` and alignment modes parsed but never evaluated.** ✅ DONE
   `_email` now emits three additional findings when DMARC is present:
@@ -393,7 +397,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B10 | DONE | `tests/test_spf_counting.py::test_redirect_ignored_when_all_present` pins RFC 7208 §6.1. |
 | B11 | WITHDRAWN (AUDIT C5) | Audit premise misread §4.6.4. `mx` costs exactly 1. Pinned RFC-compliant by `tests/test_spf_counting.py::test_bare_mx_counts_as_one_per_rfc_7208_4_6_4` and `test_mx_with_target_counts_as_one_per_rfc_7208_4_6_4`. |
 | B12 | DONE | `_count_spf_lookups` uses per-path `seen` (frozenset copy-on-add). Sibling branches count independently per RFC 7208 §4.6.4. Pinned by `tests/test_spf_seen_perpath.py` (4 cases). |
-| B13 | OPEN | SPF recursion depth guards not reconciled. Trace vs count divergence not pinned. |
+| B13 | DONE | `_count_spf_lookups` uses only `depth > 10` as the termination guard; the `depth < 5` recursion cap is removed. Trace and count align. Pinned by `tests/test_spf_depth_guard_consistency.py` (5 cases). |
 | B14 | DONE | `_email` emits `DMARC subdomain policy` (strength-rank gap → PASS/WARN/FAIL) and `DMARC alignment (DKIM)` / `DMARC alignment (SPF)` (hardening PASS when strict). Pinned by `tests/test_dmarc_sp_and_alignment.py` (9 cases). |
 | B15 | DONE (via AUDIT FP5) | `tests/test_caa_parent_walkup.py` pins the parent-label walk per RFC 8659 §3. |
 | B16 | DONE | `_parse_caa_record` + per-tag emission in `_records`. Pinned by `tests/test_caa_tag_semantics.py` (8 cases: issue, issuewild, no-CA `;` lockdown, iodef PASS+hardening, iodef WARN+hardening, malformed WARN, non-regression). |
