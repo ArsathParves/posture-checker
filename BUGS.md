@@ -227,15 +227,24 @@ an untested fix cycle regresses faster than it progresses.
   hardening bucket, no-CA lockdown detail, malformed-doesn't-drag-valid,
   non-regression when CAA absent).
 
-- [ ] **B17. `normalize_domain` accepts IP addresses.**
+- [x] **B17. `normalize_domain` accepts IP addresses.** ✅ DONE
   `127.0.0.1` passes. The web layer rejects IPs but the core function does
   not — inconsistent validation between layers; the CLI will "check" an IP.
+  **Post-impl:** IPv4 and IPv6 rejection guards at the top of
+  `normalize_domain` (`posture/core.py:76-80`); pinned by
+  `tests/test_normalize_domain.py::TestIpRejection`, `tests/test_web_validation.py`,
+  and `tests/test_validator_parity.py` (L3).
 
-- [ ] **B18. No per-label length enforcement.**
+- [x] **B18. No per-label length enforcement.** ✅ DONE
   A 64-character label is accepted; DNS limits labels to 63 octets (RFC 1035).
+  **Post-impl:** RFC 1035 §2.3.4 total-name (253 octets) and per-label
+  (63 octets) guards in `normalize_domain`; pinned by
+  `tests/test_normalize_domain.py::TestBoundaryLengths` (E1).
 
-- [ ] **B19. Single-character TLDs accepted.**
+- [x] **B19. Single-character TLDs accepted.** ✅ DONE
   `example.c` passes validation. No TLD shorter than 2 characters exists.
+  **Post-impl:** TLD-length guard in `normalize_domain`; pinned by
+  the same file as B18.
 
 ---
 
@@ -258,9 +267,14 @@ an untested fix cycle regresses faster than it progresses.
   (9 cases including partial-dangling detail scoping and the rule-1
   exemptions).
 
-- [ ] **B22. A/AAAA never sanity-checked against bogon/private space.**
+- [x] **B22. A/AAAA never sanity-checked against bogon/private space.** ✅ DONE
   Records pointing into RFC1918, `127.0.0.0/8`, or unallocated space are a
   real misconfiguration leaking internal addressing. Never flagged.
+  **Post-impl:** `_is_bogon_address` uses stdlib `ipaddress`
+  classification plus an explicit RFC 6598 CGN (`100.64/10`) fallback;
+  `checks._records` emits `A/AAAA record bogon check` FAIL when
+  non-empty; skipped entirely on absent records (rule 1). Pinned by
+  `tests/test_bogon_private_space.py` (10 cases).
 
 - [ ] **B23. Glue-record validation missing.**
   For in-bailiwick nameservers (`ns1.example.com` serving `example.com`) the
