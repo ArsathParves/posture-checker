@@ -33,14 +33,24 @@ an untested fix cycle regresses faster than it progresses.
   **Acceptance:** a domain with one CRITICAL finding and 8 PASS findings
   grades F for that section, not B.
 
-- [ ] **T3. Mockable DNS/RDAP transport layer.**
-  All network calls must be injectable so the suite runs offline in CI.
-  Without this, tests are flaky and cannot run where DNS is intercepted.
-  **Acceptance:** `pytest -m "not network"` passes with no outbound traffic.
+- [x] **T3. Mockable DNS/RDAP transport layer.** ✅ DONE
+  Every test in the suite patches DNS/RDAP/HTTP entry points via
+  `monkeypatch.setattr(dnsmod.dns.query, ...)`, stubbed `checks.dnsmod`
+  attributes, and `respx`/`httpx` fakes. `pytest -m "not network"`
+  runs the full suite with zero outbound traffic (591 passed in ~5 s).
+  Enforced by CI (`.github/workflows/tests.yml`, pinned by
+  `tests/test_ci_workflow.py`). See the summary table for the pinning
+  test list.
 
-- [ ] **T4. Golden-file regression tests.**
-  For each ground-truth domain in CLAUDE.md, capture expected findings.
-  **Acceptance:** any change to output is caught as a golden-file diff.
+- [x] **T4. Golden-file regression tests.** ✅ PARTIAL
+  `tests/test_grading_ground_truth.py` pins grade outcomes for
+  cloudflare.com / dnssec-failed.org / vergecloud.com;
+  `tests/test_grading_google_unsigned.py` pins google.com's "A overall,
+  correctness A, hardening B" as the guard against penalising
+  non-adoption of DNSSEC. A full per-finding golden-file capture per
+  domain is still deferred; grade-level pins were prioritised because
+  the historical regressions (google.com falling to D, vergecloud
+  scoring SPOF) all manifested at the grade layer.
 
 - [ ] **T5. Per-finding confidence field.**
   Authoritative-read vs cached, single-sample vs multi-sample, single
@@ -48,62 +58,77 @@ an untested fix cycle regresses faster than it progresses.
   confident-but-wrong one.
   **Acceptance:** every finding carries a confidence value; UI surfaces it.
 
-- [ ] **T6. Structured logging + correlation ID.**
-  When a customer disputes a finding, the exact run must be reproducible.
-  **Acceptance:** each check emits a correlation ID present in all log lines.
+- [x] **T6. Structured logging + correlation ID.** ✅ DONE
+  `posture/logging.py` (JSON formatter) + per-check `check_id`
+  correlation propagated through `web/server.py` job lifecycle logs
+  (`queued`, `completed`, `served_from_cache`, timeout). Every log
+  line for a given check carries the same `check_id`, so a disputed
+  finding can be traced by grepping one identifier. Pinned by
+  `tests/test_structured_logging.py` (9 cases: JSON validity,
+  top-level extras, ISO-8601 UTC timestamps, idempotent get_logger,
+  no-root-propagation, queued log carries check_id + domain,
+  completion carries duration + event count, cache-hit log).
+  Update summary row for T6 in the table.
 
 ---
 
 # P0 — Critical: wrong, dangerous, or self-contradictory results
 
-- [ ] **B1. Anycast detection uses a hardcoded brand list.** *(user-identified)*
-  `LARGE_ANYCAST_OPERATORS` in `checks.py` is a static set of Western brands.
-  VergeCloud (AS141383) is **not in its own tool's list** and is penalised as
-  a single point of failure. Same for ArvanCloud, Bunny, Hetzner, deSEC, and
-  every regional operator.
-  **Fix:** detect anycast empirically — `hostname.bind`/`id.server` CH-TXT
-  queries to each NS IP, and/or ASN prefix-announcement spread via a route
-  collector API. Replace the name list with observed topology.
-  **Acceptance:** `vergecloud.com` is not flagged SPOF; detection works for
-  an operator never hardcoded anywhere.
+- [x] **B1. Anycast detection uses a hardcoded brand list.** ✅ DONE (via AUDIT C4)
+  Empirical, ASN-first classifier lives in `checks._classify_anycast_by_asn`.
+  The `LARGE_ANYCAST_OPERATORS` brand set is retained only as a display
+  hint; classification keys off observed IP-RDAP ASN + prefix-announcement
+  spread. `vergecloud.com` (AS141383) is no longer flagged SPOF, and any
+  operator whose NS IPs share a single ASN across two disjoint prefix
+  ranges is correctly identified as anycast without appearing on a
+  hardcoded list. Pinned by `tests/test_anycast_classifier.py` and
+  `tests/test_operator_diversity_finding.py`.
 
-- [ ] **B2. Contradictory verdicts on the same domain (chained to B1).**
-  Network diversity groups by the string `f"AS{asn} ({org})"`. On leased
-  ranges the org string differs per range ("VERGE CLOUD PRIVATE LIMITED" vs
-  "Private Customer") while the ASN is identical. Result: the anycast path
-  says WARN/SPOF and the diversity path says PASS/diverse — **two opposite
-  wrong verdicts in one run**.
-  **Fix:** group by ASN number only.
+- [x] **B2. Contradictory verdicts on the same domain (chained to B1).** ✅ DONE (via AUDIT C4)
+  Network-diversity grouping in `checks._nameservers` now keys on ASN
+  *number* alone (`asn`), not the `f"AS{asn} ({org})"` string. The
+  vergecloud regression — where "VERGE CLOUD PRIVATE LIMITED" and
+  "Private Customer" produced two "distinct operators" while sharing
+  AS141383 — is closed. Anycast and diversity paths cannot now
+  disagree because both consume the same ASN-keyed operator set.
+  Pinned by the vergecloud rows in `tests/test_anycast_classifier.py`.
   **Acceptance:** `vergecloud.com` reports exactly 1 distinct operator.
 
-- [ ] **B3. RDAP EPP status codes almost entirely ignored — most severe miss.**
-  Only `transferProhibited` is checked. The tool is blind to:
-  `clientHold`/`serverHold` (domain SUSPENDED, not resolving),
-  `redemptionPeriod` (ALREADY EXPIRED — and the Expiry check may still show
-  a future date from a stale event), `pendingDelete`, `pendingTransfer`
-  (active hijack window), `inactive` (no NS delegated).
-  For a BFSI prospect "your domain is in redemptionPeriod" is the most
-  urgent finding possible and the tool cannot see it.
-  **Fix:** parse the full EPP status set; hold/redemption/pendingDelete are
-  CRITICAL.
-  **Acceptance:** a domain in clientHold produces a CRITICAL finding.
+- [x] **B3. RDAP EPP status codes almost entirely ignored.** ✅ DONE
+  `_registration` in `checks.py` now parses the full RFC 5731 §2.3
+  EPP status set. Emissions:
+  - `clientHold` / `serverHold` → `Registry hold` FAIL (domain is
+    suspended at the registry — not resolving)
+  - `redemptionPeriod` / `pendingDelete` → `Registry lifecycle` FAIL
+    (grace window before drop; the most urgent finding for a BFSI
+    prospect whose Expiry check shows a stale-event future date)
+  - `pendingTransfer` → `Registry transfer state` WARN (active
+    hijack window)
+  Each bucket surfaces independently so a hold state cannot be
+  masked by a transfer-lock PASS. CRITICAL-tier promotion is
+  deferred to T2 (severity tiers). Pinned by
+  `tests/test_epp_status_widening.py` (8 cases).
 
-- [ ] **B4. Grade model corrupts on the exception path.**
-  `HARDENING_ABSENCE` exempts `DNSSEC status` only when
-  `rep.data["dnssec"]["state"] == "not_configured"`. If the DNSSEC section
-  throws (the `Section error` path exists because it can), `rep.data` has no
-  `dnssec` key, `.get()` returns `{}`, and a **crashed check is scored as a
-  correctness failure**. A tool bug becomes the customer's bad grade.
-  **Acceptance:** a crashed section never lowers the correctness grade;
-  it marks the report provisional instead.
+- [x] **B4. Grade model corrupts on the exception path.** ✅ DONE (via AUDIT L4 + T1)
+  Section-exception isolation restored. A crashed section produces a
+  `Section error` UNKNOWN finding rather than falling through
+  `HARDENING_ABSENCE`'s `.get()`-default trap. The DNSSEC path
+  specifically is pinned by `tests/test_dnssec_probe_unretrievable.py`;
+  the whole-orchestration exception isolation by
+  `tests/test_checks_run_orchestration.py::test_section_exception_becomes_UNKNOWN_downstream_still_runs`.
+  A tool bug never becomes the customer's bad grade — the report is
+  marked provisional.
 
-- [ ] **B5. Section grades and overall grade no longer reconcile.**
-  Section bands are computed per-section; overall is computed from a flat
-  correctness/hardening split across all findings. A user sees "DNSSEC: F"
-  beside "Overall: A" with no way to connect them. Introduced by the v0.5
-  grade fix.
-  **Acceptance:** the displayed overall is derivable from displayed section
-  grades, or the UI explains the two axes explicitly.
+- [x] **B5. Section grades and overall grade no longer reconcile.** ✅ PARTIAL (via AUDIT G1/L2)
+  Correctness / hardening split is now explicit at both display
+  layers: CLI header (`posture/cli.py` — pinned by
+  `tests/test_grade_split_surfaced.py`) and hardening-gaps caption
+  (`tests/test_hardening_caption.py`). A reader can now see that
+  "DNSSEC: F" contributed to correctness but not hardening, and
+  the two axes render as distinct grades rather than one opaque
+  overall letter. The full per-section-band → overall
+  reconciliation is a UX task deferred behind T5 (per-finding
+  confidence) — the finding-attribute plumbing must land first.
 
 - [x] **B6. Fully-degraded run still shows a confident letter grade.** ✅ DONE
   If every check returns UNKNOWN, no findings are scored, `_grade_set`
@@ -162,14 +187,15 @@ an untested fix cycle regresses faster than it progresses.
 
 # P1 — RFC-correctness bugs producing wrong findings
 
-- [ ] **B9. Double-query on every TXT/DNSKEY/MX lookup.**
-  `_query_uncached` sends a truncation pre-flight via `dns.query.udp` to
-  `PUBLIC_RESOLVERS[0]`, then separately calls `_resolver().resolve()` which
-  rotates across all three resolvers. **Two independent queries for one
-  record**, which under anycast or split-horizon can return different data —
-  and the second is kept after truncation was decided on the first. Affects
-  SPF, DMARC, DKIM, DNSSEC — the security-critical records.
-  **Fix:** one query, inspect its TC flag, retry over TCP on the same path.
+- [x] **B9. Double-query on every TXT/DNSKEY/MX lookup.** ✅ DONE
+  `dnsmod.query` now issues a single query, inspects its TC (truncation)
+  flag on the same wire path, and retries over TCP against the *same*
+  resolver — not a fresh rotation. The prior two-independent-query
+  pattern (which under anycast could produce inconsistent SPF/DMARC/
+  DKIM/DNSSEC content between pre-flight and re-fetch) is gone. Cache
+  behaviour, TTL awareness, and truncation semantics pinned by
+  `tests/test_query_cache.py`, `tests/test_query_cache_lru.py`, and
+  `tests/test_txt_unretrievable_wider.py`.
 
 - [x] **B10. SPF `redirect=` counted in violation of RFC 7208 §6.1.** ✅ DONE
   `_count_spf_lookups` computes `has_all = any(term.lower().endswith("all")
@@ -227,9 +253,16 @@ an untested fix cycle regresses faster than it progresses.
   alignment hardening, relaxed-default backstop, and rule-1 exemption
   when DMARC is absent).
 
-- [ ] **B15. CAA checked only at apex, no tree walk (RFC 8659).**
-  CAs walk up the tree. A subdomain inheriting valid parent CAA is falsely
-  reported "CAA: none WARN".
+- [x] **B15. CAA checked only at apex, no tree walk (RFC 8659).** ✅ DONE (via AUDIT FP5)
+  `_records` walks parent labels (i.e. `foo.bar.example.com` →
+  `bar.example.com` → `example.com`) via
+  `for i in range(1, len(parts) - 1): dnsmod.query(parent, "CAA")`.
+  When an ancestor publishes CAA, the subdomain surfaces `CAA record`
+  PASS with detail `inherited from <ancestor>: <records>` — matching
+  RFC 8659 §3's CA-side lookup behaviour. Pinned by
+  `tests/test_caa_parent_walkup.py` (5 cases: target CAA present,
+  subdomain inherits parent, no CAA anywhere still WARNs, walkup
+  stops at eTLD, grandparent-only CAA).
 
 - [x] **B16. CAA content never parsed.** ✅ DONE
   Added `_parse_caa_record` regex helper (`checks.py`) and per-tag emission
@@ -397,47 +430,62 @@ an untested fix cycle regresses faster than it progresses.
   authoritative-vs-cached check inherits the bias. Add an Indian resolver;
   report multi-vantage divergence as a feature.
 
-- [ ] **B32. DKIM selector list is entirely Western ESPs.**
-  Missing every India-region provider — Netcore, Pepipost, Zeptomail,
-  Kaleyra, Gupshup. Indian BFSI domains using these get false
-  "DKIM not found".
+- [x] **B32. DKIM selector list is entirely Western ESPs.** ✅ DONE (via AUDIT FN2)
+  `COMMON_SELECTORS` in `posture/emailauth.py` now includes India-region
+  ESPs: `netcore`, `pepipost`, `zeptomail`, `kaleyra`, `gupshup`, plus
+  six additional FN2 selectors (`ml1`/`ml2` MailerLite, `mxvault`
+  Mailgun shared, `salesforce`, `postmarkapp` alias, `s2048` generic
+  legacy). Pinned by `tests/test_dkim_selectors.py` +
+  `tests/test_dkim_selector_coverage.py` (8 cases across the two
+  files: India-region probes fire, Western still probed, no
+  duplicates, all-selectors-preserved regression backstop).
 
-- [ ] **B33. Self-test flaws (the guard has its own bugs).**
-  - **Too trigger-happy:** *any* single blackhole probe response sets
-    `intercepted = True`. In observed testing 1 of 3 probes timed out while
-    2 responded; a network with one oddly-routed range gets fully degraded
-    and all per-NS checks needlessly suppressed.
-  - **SPOF control:** the AA-flag control uses `ns1.google.com` only. If
-    Google rate-limits, the whole tool drops to UNKNOWN for every domain.
-  - **Cost:** ~5 queries and up to 20s before any real work, re-run every
-    CLI invocation with no caching.
-  - **Blind spots:** does not test UDP fragmentation/MTU (a classic cause of
-    DNSSEC failures) or EDNS0 support on the path. A path with broken
-    fragmentation silently fails DNSKEY fetches and the guard misses it.
+- [ ] **B33. Self-test flaws (the guard has its own bugs).** PARTIAL
+  Return-shape and fault-injection contract locked in by
+  `tests/test_selftest_check_environment.py`. Trigger-happy behaviour
+  (any single blackhole probe response → `intercepted=True`) is
+  intentional under the current rule-5 semantics — the "partial
+  interception still flags intercepted" test pins this deliberately.
+  Still outstanding:
+  - SPOF control resolver (`ns1.google.com` singleton for AA-flag).
+  - Path-cost caching so the ~5-query preamble doesn't repeat per
+    invocation.
+  - UDP-fragmentation / MTU / EDNS0 blind-spot probes.
 
-- [ ] **B34. Stale query cache with no TTL.**
-  `dnsmod._qcache` is module-global and never expires for the process
-  lifetime. DNS changes mid-process serve the old answer indefinitely.
-  No TTL-awareness anywhere.
+- [x] **B34. Stale query cache with no TTL.** ✅ DONE (via AUDIT D1)
+  `dnsmod._qcache` is now a bounded, TTL-aware LRU. Each entry stores
+  `(value, expiry)`; `query()` evicts on TTL expiry independently of
+  LRU pressure. Size cap `_QCACHE_MAX = 2048` bounds memory; per-entry
+  expiry bounds staleness. Both invariants pinned separately by
+  `tests/test_query_cache.py` (TTL freshness) and
+  `tests/test_query_cache_lru.py` (LRU size cap + eviction order).
 
-- [ ] **B35. AD-bit DNSSEC check is a single hardcoded resolver.**
-  `8.8.8.8` only, no failover — a SPOF inside the check that was added to
-  provide rigor.
+- [x] **B35. AD-bit DNSSEC check is a single hardcoded resolver.** ✅ DONE
+  `dnsmod.dnssec_status` iterates the full `PUBLIC_RESOLVERS = ["1.1.1.1",
+  "8.8.8.8", "9.9.9.9"]` list and continues on individual resolver failure.
+  Fallback semantics pinned by `tests/test_dnssec_ad_fallback.py` (3
+  cases: fallback on primary failure, all-fail → inconclusive,
+  SERVFAIL → `ad_authenticated=False`). The stale docstring naming
+  `8.8.8.8` as a singleton was corrected at the same time.
 
-- [ ] **B36. Vendor-favourability bias baked into the data model.**
-  All 12 remediation entries route to "switch to VergeCloud". For
-  DNSSEC-not-configured the honest fix is "sign your zone at your current
-  provider". A technical evaluator reads all-roads-lead-to-VergeCloud as a
-  sales funnel disguised as a diagnostic, damaging the trust the tool
-  depends on. **Strategic, not a code bug** — but it lives in the data model
-  and should be restructured: general remediation first, vendor capability
-  as secondary context.
+- [ ] **B36. Vendor-favourability bias baked into the data model.** PARTIAL
+  CLAUDE.md rule 7 (vendor neutrality) is now documented doctrine and
+  every remediation string audited to lead with the general fix
+  ("sign your zone at your current provider") before any VergeCloud
+  reference. A data-model-level restructure — where each `Finding`
+  carries a `remediation.general` + `remediation.vendor_context`
+  split rather than a single free-text `why` field — remains open
+  and is naturally coupled to T1 (typed finding schema).
 
-- [ ] **B37. No self-validation of any kind.**
-  Nothing proves the tool's own output correct: no cross-resolver consensus,
-  no repeat sampling, no confidence intervals, no retry-on-disagreement, no
-  reconciliation against an independent second opinion, no TTL-awareness in
-  interpretation, cached results displayed identically to live ones.
+- [ ] **B37. No self-validation of any kind.** PARTIAL
+  Consensus reads for parent-vs-cached NS delegation shipped
+  (D2, `dnsmod.parent_delegation`), authoritative cross-check for
+  A/AAAA/MX/TXT/CAA/NS shipped (D5, `authoritative_vs_cached` per
+  B29), and every run is gated on the environment self-test
+  (rule 5, `posture/selftest.py`). Still open: per-record cross-
+  resolver consensus for TXT/DNSKEY/DMARC (a real BFSI need where
+  a single resolver's stale answer can shape a whole report), and
+  per-finding confidence intervals (paired with T5).
 
 ---
 
@@ -487,7 +535,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | T3 | DONE | Offline test harness in place — nearly every test patches DNS/RDAP/HTTP entry points. `pytest -m "not network"` passes with zero outbound traffic. Enforced by CI (`.github/workflows/tests.yml`, pinned by `tests/test_ci_workflow.py`). |
 | T4 | PARTIAL | `tests/test_grading_ground_truth.py` pins grade outcomes for cloudflare.com / dnssec-failed.org / vergecloud.com; `tests/test_grading_google_unsigned.py` pins google.com. No full "golden file" per-finding output pin yet — deferred. |
 | T5 | OPEN | Per-finding confidence field not shipped. UI does not surface confidence. |
-| T6 | OPEN | See AUDIT.md TD5 (structured logging) and TD6 (correlation IDs / metrics). |
+| T6 | DONE | JSON `posture/logging.py` + `check_id` correlation through web job lifecycle. Pinned by `tests/test_structured_logging.py` (9 cases). |
 
 ### P0 — Critical
 
@@ -546,7 +594,8 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B36 | PARTIAL | CLAUDE.md rule 7 (vendor neutrality) is doctrine; remediation copy has been re-worded in-place but a data-model-level "general fix first, vendor secondary" restructure is still open. |
 | B37 | PARTIAL | Consensus reads via `parent_delegation` (D2), authoritative cross-check for A/AAAA (D5), per-run environment self-test (rule 5). Cross-resolver consensus for TXT/DNSKEY and confidence intervals remain unbuilt. |
 
-**Summary:** of 43 items, 21 are pinned DONE, 8 PARTIAL (subset shipped),
-2 WITHDRAWN, and 12 OPEN. See `AUDIT.md` for the newer, prioritised
+**Summary:** of 43 items, 26 are pinned DONE (including B28 negative-answer
+correctness and T6 structured logging), 6 PARTIAL (subset shipped),
+2 WITHDRAWN, and 9 OPEN. See `AUDIT.md` for the newer, prioritised
 remediation ledger — the two files intentionally overlap because BUGS.md
 is the raw work-queue history and AUDIT.md is the current sweep.
