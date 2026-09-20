@@ -10,8 +10,16 @@ import requests
 
 RDAP_BOOTSTRAP_URL = "https://data.iana.org/rdap/dns.json"
 RDAP_IP_BOOTSTRAP_URL = "https://data.iana.org/rdap/ipv4.json"
-UA = "vergecloud-posture-checker/0.1 (prototype)"
+# S9: outbound HTTP must name the tool + version + a contact URL.
+# Third parties (IANA, ARIN, NIXI, DNS/RDAP registries) get our traffic;
+# a distinctive UA lets them rate-limit our tool specifically instead
+# of an entire IP block, and gives them a way to reach us if the tool's
+# traffic pattern is problematic.
+UA = "posture-checker/0.5 (+https://github.com/vergecloud/posture-checker)"
 HEADERS = {"Accept": "application/rdap+json", "User-Agent": UA}
+# For non-RDAP outbound calls (IANA bootstrap, follow-up JSON fetches
+# where the server is not necessarily an RDAP endpoint).
+UA_HEADERS = {"User-Agent": UA}
 
 # ---------------------------------------------------------------- findings
 
@@ -34,10 +42,82 @@ class Finding:
     # Emit-site is authoritative — the classification lives with the check
     # that knows the answer, not in a global label set in grade().
     hardening: bool = False
+    # T2 severity tier: "" (default, ordinary) or "CRITICAL". A CRITICAL
+    # FAIL/WARN floors its section grade to F and the overall grade to F —
+    # a full-zone AXFR leak or a registry-hold state cannot be diluted by
+    # surrounding PASSes on other checks. CRITICAL PASS is legal but has
+    # no floor effect (you passed the critical check). CRITICAL UNKNOWN
+    # does NOT floor (rule 1: unretrievable stays unretrievable).
+    # Orthogonal to `hardening`: a CRITICAL marker overrides the
+    # hardening classification for grading purposes to prevent a
+    # "hardening hides critical" false negative.
+    severity: str = ""
+    # T5 confidence tier: informational, UI-only. Never fed into grading —
+    # if it were, callers would be tempted to downgrade a broken finding to
+    # `low` to soften the report. Tiers:
+    #   "high"   — authoritative-server read, multi-vantage consensus, or a
+    #              validated cryptographic computation (DS→DNSKEY chain).
+    #   "medium" — single-resolver answer, cached response, or a single-
+    #              probe result agreeing with the tool's expectation.
+    #   "low"    — indirect/inferred signal, or a partial-probe result.
+    #   ""       — default; the caller made no claim.
+    # Migration of specific emit sites to declare `confidence=` is
+    # follow-up work (same shape as T2's mechanism-first pattern).
+    confidence: str = ""
+    # T1 stable identifier: display-independent handle for external
+    # consumers (JSON --output, SPA remediation lookups, cross-run
+    # diffs). Grading MUST NOT read this field — if it did, external
+    # callers could steer grades by injecting IDs, and rewording a
+    # display label would break grading (the exact bug this field
+    # exists to prevent). Empty string is the pre-T1 default; migration
+    # of specific emit sites is follow-up work (mechanism-first, same
+    # shape as T2 severity and T5 confidence).
+    finding_id: str = ""
 
     @property
     def is_scored(self) -> bool:
         return self.status in {"PASS", "WARN", "FAIL"}
+
+    @property
+    def is_critical(self) -> bool:
+        return self.severity == "CRITICAL"
+
+
+# ---------------------------------------------------------------- remediation
+#
+# B36 — remediation guidance is a two-field structure, not a plain string.
+#
+# CLAUDE.md rule 7 forbids the pattern "every remediation is a VergeCloud
+# sales line" because a tool where every finding routes to "switch
+# vendors" reads as a funnel and burns the credibility the tool exists
+# for. The neutrality mandate is easier to hold if the type system
+# enforces it — a plain-string remediation column lets someone add a
+# vendor-first line six months from now and no test catches it, but a
+# `Remediation(general, vendor)` type forces every new entry to answer
+# "what is the general RFC / protocol fix?" before adding vendor-
+# specific augmentation.
+#
+# The renderer's job is to emit `general` first (primary text) and
+# `vendor`, if present, as a secondary rider. Tests in
+# `test_remediation_vendor_neutrality.py` lock the contract.
+
+
+@dataclass(frozen=True)
+class Remediation:
+    """Remediation guidance for a single finding label.
+
+    `general` — the RFC / protocol / vendor-agnostic fix. Required.
+        This is the primary text the reader acts on regardless of
+        their DNS provider.
+    `vendor` — an OPTIONAL VergeCloud-specific rider naming the
+        product capability that addresses the same issue. Rendered
+        secondary to `general`, visually distinct.
+
+    Frozen so entries can be reused across renderers without a caller
+    accidentally mutating the general-fix text at runtime.
+    """
+    general: str
+    vendor: str = ""
 
 
 @dataclass
@@ -50,8 +130,11 @@ class Report:
     data: dict[str, Any] = field(default_factory=dict)
     degraded: list[str] = field(default_factory=list)  # modules that failed
 
-    def add(self, section, label, status, detail="", why="", hardening=False):
-        self.findings.append(Finding(section, label, status, detail, why, hardening))
+    def add(self, section, label, status, detail="", why="",
+            hardening=False, severity="", confidence="", finding_id=""):
+        self.findings.append(Finding(section, label, status, detail, why,
+                                     hardening, severity, confidence,
+                                     finding_id))
 
     def section(self, name: str) -> list[Finding]:
         return [f for f in self.findings if f.section == name]
@@ -104,6 +187,14 @@ def normalize_domain(raw: str) -> tuple[str, str, list[str]]:
     if not re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+", puny):
         raise ValueError(f"'{raw}' is not a syntactically valid domain")
 
+    # RFC 1035 §2.3.4: total name length must be 253 octets or less
+    # (excluding the trailing dot). Checked before per-label so operators
+    # see the more informative diagnostic on grossly oversized input.
+    if len(puny) > 253:
+        raise ValueError(
+            f"Domain total length {len(puny)} exceeds 253 octets (RFC 1035 §2.3.4)"
+        )
+
     # RFC 1035: labels must be 63 octets or less
     labels = puny.split(".")
     for lbl in labels:
@@ -124,14 +215,27 @@ def _extract_vcard_fn(vcard: list) -> str | None:
 
     RFC 6350: vCard structure varies by tool; FN component may have different formats.
     This function safely extracts the text value without assumptions about indexing.
+
+    E7: The returned string is NFC-normalised and whitespace-stripped so
+    that two RDAP responses containing the same visible name are byte-
+    identical (an NFD payload from one registry and an NFC payload from
+    another must not dedupe as different) and so that stray CR/LF or
+    padding from malformed payloads never propagates into findings.
+    A non-string value (some vCard emitters ship a list at item[3])
+    returns None rather than raising or leaking a list downstream.
     """
+    import unicodedata
+
     if not vcard or len(vcard) < 2:
         return None
     try:
         for item in vcard[1]:  # vCard components are in [1]
             if item and len(item) >= 4 and item[0] == "fn":
-                # item[3] contains the text value in standard vCard format
-                return item[3]
+                value = item[3]
+                if not isinstance(value, str):
+                    return None
+                normalised = unicodedata.normalize("NFC", value).strip()
+                return normalised or None
     except (IndexError, TypeError):
         pass
     return None
@@ -149,7 +253,7 @@ def _load_bootstrap() -> dict[str, str]:
         # Cache expired, remove it
         del _bootstrap_cache["dns"]
 
-    r = requests.get(RDAP_BOOTSTRAP_URL, timeout=20)
+    r = requests.get(RDAP_BOOTSTRAP_URL, headers=UA_HEADERS, timeout=20)
     r.raise_for_status()
     j = r.json()
     mapping: dict[str, str] = {}
@@ -309,7 +413,7 @@ def _ip_endpoints(ip: str) -> list[str]:
     try:
         # Load IP bootstrap with 24-hour TTL
         if "ipv4" not in _ip_bootstrap:
-            r = requests.get(RDAP_IP_BOOTSTRAP_URL, timeout=20)
+            r = requests.get(RDAP_IP_BOOTSTRAP_URL, headers=UA_HEADERS, timeout=20)
             r.raise_for_status()
             data = r.json()
             _ip_bootstrap["ipv4"] = (data, time.time() + 86400)
@@ -317,7 +421,7 @@ def _ip_endpoints(ip: str) -> list[str]:
             data, expiry = _ip_bootstrap["ipv4"]
             if time.time() >= expiry:
                 # Cache expired, reload
-                r = requests.get(RDAP_IP_BOOTSTRAP_URL, timeout=20)
+                r = requests.get(RDAP_IP_BOOTSTRAP_URL, headers=UA_HEADERS, timeout=20)
                 r.raise_for_status()
                 data = r.json()
                 _ip_bootstrap["ipv4"] = (data, time.time() + 86400)

@@ -18,8 +18,59 @@ const statusEl = document.getElementById("status");
 const headerEl = document.getElementById("header");
 const sectionsEl = document.getElementById("sections");
 const footerEl = document.getElementById("footer");
+const envBannerEl = document.getElementById("envBanner");
 
 let currentSource = null;
+
+// W5 — Preflight /healthz on load so the user is warned about a
+// degraded network path BEFORE they submit. /healthz returns 503
+// with a JSON payload naming the interception / TCP/53 / AA-flag
+// problems detected by posture.selftest.check_environment.
+async function preflightEnvironment() {
+  try {
+    const resp = await fetch("/healthz", {headers: {"Accept": "application/json"}});
+    let data = null;
+    try { data = await resp.json(); } catch (_) { /* opaque body */ }
+    if (resp.ok && data && data.status === "ok") return;  // healthy → no banner
+    renderEnvBanner(data);
+  } catch (_) {
+    // Network error hitting our own /healthz is itself a signal —
+    // surface it so the user doesn't submit a doomed scan.
+    renderEnvBanner({status: "unreachable", environment: null});
+  }
+}
+
+function renderEnvBanner(healthz) {
+  const env = (healthz && healthz.environment) || {};
+  const notes = Array.isArray(env.notes) ? env.notes : [];
+  envBannerEl.textContent = "";
+  const heading = document.createElement("strong");
+  heading.textContent = "Server environment is degraded — results may be incomplete.";
+  envBannerEl.appendChild(heading);
+  const desc = document.createElement("div");
+  const bits = [];
+  if (env.intercepted) bits.push("DNS interception detected");
+  if (env.aa_flag_trustworthy === false) bits.push("authoritative-flag rewriting");
+  if (env.tcp53_direct === false) bits.push("TCP/53 blocked (truncated responses cannot be retried)");
+  if (!bits.length && healthz && healthz.status === "unreachable")
+    bits.push("/healthz endpoint unreachable");
+  desc.textContent = bits.length
+    ? "Detected: " + bits.join("; ") + "."
+    : "Per-nameserver probing will be suppressed on this server.";
+  envBannerEl.appendChild(desc);
+  if (notes.length) {
+    const ul = document.createElement("ul");
+    for (const n of notes) {
+      const li = document.createElement("li");
+      li.textContent = n;
+      ul.appendChild(li);
+    }
+    envBannerEl.appendChild(ul);
+  }
+  envBannerEl.classList.remove("hidden");
+}
+
+preflightEnvironment();
 
 // Fixed set of finding statuses the server can emit. Any value outside
 // this set is coerced to "INFO" before use — status flows into a CSS
@@ -76,17 +127,41 @@ function showStatus(text, isError = false) {
   statusEl.classList.remove("hidden");
 }
 
+// W2 — render an error status line with an inline Retry button that
+// re-submits the form for the same domain. The button lives inside
+// the aria-live #status region so screen readers announce it.
+function showStatusWithRetry(text) {
+  statusEl.className = "status error";
+  statusEl.classList.remove("hidden");
+  statusEl.textContent = "";
+  const msg = document.createElement("span");
+  msg.textContent = text + " ";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.id = "retryBtn";
+  btn.className = "retry-btn";
+  btn.textContent = "Retry";
+  btn.addEventListener("click", () => {
+    form.dispatchEvent(new Event("submit", {cancelable: true}));
+  });
+  statusEl.appendChild(msg);
+  statusEl.appendChild(btn);
+}
+
 function prepareSections() {
   for (const name of SECTION_ORDER) {
     const el = document.createElement("div");
     el.className = "section pending";
     el.dataset.section = name;
+    // A4 — <h2> for the section title so screen-reader users can
+    // navigate by heading; findings inside <ul> so they can be
+    // stepped through as list items.
     el.innerHTML = `
       <div class="section-head">
-        <span>${escapeHtml(name)}</span>
+        <h2>${escapeHtml(name)}</h2>
         <span class="grade-pill">running…</span>
       </div>
-      <div class="section-body"></div>`;
+      <ul class="section-body"></ul>`;
     sectionsEl.appendChild(el);
   }
 }
@@ -135,10 +210,12 @@ function openStream(checkId) {
   });
 
   currentSource.addEventListener("error", (e) => {
-    // EventSource errors don't always carry data
+    // W2 — EventSource errors don't always carry data; surface a
+    // Retry cue so the user isn't left staring at a half-populated
+    // table wondering whether the scan is still running.
     let msg = "Stream error";
     try { const d = JSON.parse(e.data); msg = d.message || msg; } catch (_) {}
-    showStatus(msg, true);
+    showStatusWithRetry(msg + " — connection lost.");
     submitBtn.disabled = false;
     if (currentSource) { currentSource.close(); currentSource = null; }
   });
@@ -157,11 +234,11 @@ function renderSection(name, findings, elapsedMs) {
   body.innerHTML = "";
   const shown = findings.filter(f => f.status !== "INFO" || f.detail);
   for (const f of shown) {
-    const row = document.createElement("div");
+    const row = document.createElement("li");
     row.className = "finding";
     const badgeCls = safeStatus(f.status);
     row.innerHTML = `
-      <span class="badge ${badgeCls}">${badgeCls}</span>
+      <span class="badge ${badgeCls}" aria-label="${badgeCls}">${badgeCls}</span>
       <span class="label">${escapeHtml(f.label)}</span>
       <span class="detail">${escapeHtml(f.detail || "")}${
         f.why ? `<span class="why">${escapeHtml(f.why)}</span>` : ""
@@ -174,14 +251,22 @@ function renderSection(name, findings, elapsedMs) {
 
 function renderGrades(grades) {
   const gradeEl = headerEl.querySelector(".header-grade");
-  let gradeText = "Overall posture: " + grades.overall +
+  // B6: "—" is the not-gradeable sentinel — surface it as the
+  // descriptive phrase, not the em-dash, so a reader sees "no data
+  // reached grading", not a mysterious punctuation mark.
+  const overallText = grades.overall === "—" ? "Not gradeable" : grades.overall;
+  let gradeText = "Overall posture: " + overallText +
     (grades.provisional ? "  (provisional)" : "");
   if (grades.correctness_grade && grades.correctness_grade !== "—")
     gradeText += "   ·   Correctness: " + grades.correctness_grade;
   if (grades.hardening_grade && grades.hardening_grade !== "—")
     gradeText += "   ·   Hardening: " + grades.hardening_grade;
   gradeEl.textContent = gradeText;
-  gradeEl.className = "header-grade " + grades.overall;
+  // Route the "—" band to a stable, valid CSS class name — a raw
+  // em-dash in a class list is technically valid CSS but reads as noise
+  // in devtools and would collide if any stylesheet ever targets it.
+  gradeEl.className = "header-grade " +
+    (grades.overall === "—" ? "not-gradeable" : grades.overall);
 
   for (const [name, [band]] of Object.entries(grades.sections || {})) {
     const el = sectionsEl.querySelector(`.section[data-section="${cssEscape(name)}"]`);

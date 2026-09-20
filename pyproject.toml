@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "posture-checker"
+version = "0.5.0"
+description = "DNS/RDAP/DNSSEC/email-authentication posture checker (CLI + web)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [
+    { name = "VergeCloud" },
+]
+keywords = ["dns", "dnssec", "rdap", "spf", "dkim", "dmarc", "posture", "security"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: Name Service (DNS)",
+    "Topic :: Security",
+]
+
+# Core CLI dependencies. Kept minimal so `pip install .` produces a
+# functional CLI on any platform without pulling in the web stack.
+# uvicorn deliberately NOT here — see [project.optional-dependencies].web.
+# cryptography floor pinned to 42 to guarantee prebuilt wheels are picked
+# up rather than a Rust source build (CP7).
+dependencies = [
+    "dnspython>=2.4",
+    "rich>=13",
+    "requests>=2.31",
+    "cryptography>=42",
+    "pydantic>=2",
+]
+
+# Web-only dependencies. Deliberately uses plain `uvicorn` (not
+# `uvicorn[standard]`) because the `[standard]` extra pulls uvloop
+# which does NOT install on Windows (CP4). The web layer runs without
+# uvloop; a small perf loss beats a hard install failure.
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.100",
+    "uvicorn>=0.23",
+    "slowapi>=0.1.9",
+]
+# Optional: convenience extra that pulls uvloop where it's supported.
+# Users on Linux/macOS running high-traffic deployments can `pip install
+# posture-checker[web,performance]`.
+performance = [
+    "uvloop>=0.19; platform_system != 'Windows'",
+    "httptools>=0.6",
+]
+dev = [
+    "pytest>=7",
+    # httpx is used by `fastapi.testclient.TestClient` (S5+S6 test
+    # suite). Not a runtime dep of the web layer — only the test tree
+    # imports TestClient.
+    "httpx>=0.23",
+    # Async test drivers for S7 SSE-timeout tests. `asyncio_mode = auto`
+    # in pytest.ini so `async def test_*` functions run without an
+    # explicit @pytest.mark.asyncio decorator per test.
+    "pytest-asyncio>=0.23",
+]
+
+# Console-script entry points. After `pip install .`, `posture-cli` and
+# `posture-web` are on PATH on every platform — no bash launcher needed
+# (CP1). Windows users can `pip install .[web]` then run `posture-web`.
+[project.scripts]
+posture-cli = "posture.cli:main"
+posture-web = "web.server:main"
+
+[tool.setuptools]
+packages = ["posture", "web"]
+
+# Include the SPA assets (index.html, app.js, style.css) inside the
+# installed `web` package so `posture-web` serves them from the wheel.
+[tool.setuptools.package-data]
+web = ["static/*"]

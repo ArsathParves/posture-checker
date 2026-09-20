@@ -1,7 +1,8 @@
 :root {
+  color-scheme: dark;
   --bg: #0e1218;
   --fg: #e6ecf3;
-  --muted: #8896a8;
+  --muted: #b0bccd;
   --card: #171d26;
   --card-border: #232c39;
   --accent: #4aa3ff;
@@ -9,12 +10,27 @@
   --warn: #f5b400;
   --fail: #ff5a5a;
   --unknown: #b48cff;
-  --info: #8896a8;
+  --info: #b0bccd;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 * { box-sizing: border-box; }
+
+/* A5 — visually-hide labels while keeping them in the accessibility tree. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* A2 — restore a visible focus ring for keyboard users. `:focus-visible`
+   only lights up under keyboard navigation, so pointer clicks stay
+   ring-free but Tab / arrow-key users can see where they are. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 body {
   margin: 0; padding: 0;
   background: var(--bg); color: var(--fg);
@@ -52,6 +68,31 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
   border-radius: 6px; font-size: 13px; color: var(--muted);
 }
 .status.error { border-color: var(--fail); color: var(--fail); }
+/* W5 — landing banner shown when /healthz preflight reports the
+   deploy environment is degraded (DNS interception, TCP/53 blocked,
+   AA-flag rewrite). Warm-yellow border so it reads as a warning,
+   not a stop-the-world error. */
+.env-banner {
+  padding: 12px 14px; margin-bottom: 16px;
+  background: rgba(245,180,0,0.08);
+  border: 1px solid var(--warn); border-radius: 6px;
+  font-size: 13px; color: var(--fg);
+}
+.env-banner strong { color: var(--warn); }
+.env-banner ul { margin: 6px 0 0 20px; padding: 0; color: var(--muted); }
+/* W2 — inline Retry button inside the SSE error status. Sits in the
+   same row as the message so the eye finds it immediately. */
+.retry-btn {
+  margin-left: 8px;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--fail);
+  border: 1px solid var(--fail);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
 .hidden { display: none; }
 
 .report-header {
@@ -83,6 +124,18 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
   display: flex; justify-content: space-between; align-items: center;
   padding: 12px 20px; font-weight: 600; font-size: 14px;
   border-bottom: 1px solid var(--card-border);
+}
+/* A4 — <h2> in the section head must inherit the surrounding row's
+   typography, not the browser default h2 size. */
+.section-head h2 {
+  margin: 0; padding: 0;
+  font-size: inherit; font-weight: inherit; line-height: inherit;
+}
+/* A4 — .section-body is a <ul>; reset list defaults so the grid
+   layout defined on .finding still lines up. */
+.section-body {
+  list-style: none;
+  margin: 0; padding: 0;
 }
 .section-head .grade-pill {
   padding: 2px 8px; border-radius: 4px; font-size: 12px;
@@ -122,4 +175,12 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 @media (max-width: 640px) {
   .finding { grid-template-columns: 60px 1fr; }
   .finding .detail { grid-column: 1 / -1; padding-left: 72px; }
+  /* W3 — on narrow viewports a long section title collided with the
+     grade pill because `justify-content: space-between` doesn't wrap.
+     Reflow to a stacked column so both remain readable. */
+  .section-head {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+  .section-head .grade-pill { flex-shrink: 0; }
 }

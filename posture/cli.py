@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
@@ -12,6 +14,55 @@ from rich.table import Table
 from rich.text import Text
 
 from .checks import SECTIONS, grade, run
+from .core import Remediation
+
+
+# S8: first-run banner. The tool makes live queries against real third-
+# party infra; users should know that on first invocation. Acked once
+# per machine via a small file under XDG_CONFIG_HOME; the env-var opt-
+# out is for CI / scripted runs and deliberately does NOT persist ack.
+
+def _ack_file_path() -> Path:
+    """Locate the first-run ack file (XDG-standard)."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "posture-checker" / "first-run.ack"
+
+
+_FIRST_RUN_BANNER = (
+    "posture-checker: first-run notice\n"
+    "  This tool makes LIVE queries against real third-party infrastructure:\n"
+    "    • recursive DNS resolvers (public + your default)\n"
+    "    • authoritative nameservers of the checked domain\n"
+    "    • RDAP registries (IANA, ARIN, NIXI, per-TLD)\n"
+    "    • AXFR probes (TCP/53) against the domain's nameservers\n"
+    "    • HTTPS fetches for MTA-STS / bootstrap data\n"
+    "  This is normally fine (the domain owner could run these themselves),\n"
+    "  but be aware of it before probing domains you don't operate.\n"
+    "  Set POSTURE_ACK_FIRST_RUN=1 to skip this message.\n"
+)
+
+
+def _maybe_show_first_run_banner():
+    """Print the first-run banner to stderr if it has not been acked.
+
+    Writes an ack file after printing so subsequent runs are silent.
+    `POSTURE_ACK_FIRST_RUN=1` in the env skips the banner AND skips the
+    ack write — CI / one-shot scripts don't persist state for the
+    interactive user who shares the box."""
+    if os.environ.get("POSTURE_ACK_FIRST_RUN") == "1":
+        return
+    ack = _ack_file_path()
+    if ack.exists():
+        return
+    print(_FIRST_RUN_BANNER, file=sys.stderr)
+    try:
+        ack.parent.mkdir(parents=True, exist_ok=True)
+        ack.write_text("acked\n", encoding="utf-8")
+    except OSError:
+        # A read-only $HOME (e.g. some container images) shouldn't
+        # crash the CLI — just skip the ack write and reprint next time.
+        pass
 
 console = Console()
 
@@ -26,21 +77,113 @@ STATUS_STYLE = {
 GRADE_COLOR = {"A": "bold green", "B": "green", "C": "yellow", "D": "orange3",
                "F": "bold red", "—": "dim"}
 
-# Each failing finding maps to the VergeCloud capability that addresses it.
-REMEDIATION = {
-    "DNSSEC status": "VergeCloud ADNS supports one-click DNSSEC signing with managed key rollover.",
-    "Nameserver count": "VergeCloud ADNS provides a redundant anycast nameserver set by default.",
-    "Parent delegation vs zone NS": "VergeCloud onboarding validates parent-side delegation against the served zone.",
-    "Nameserver reachability": "VergeCloud anycast removes single-node reachability failure.",
-    "Network diversity": "VergeCloud ADNS runs across a distributed anycast network.",
-    "CAA record": "VergeCloud ADNS lets you publish CAA policy from the same control panel.",
-    "SPF": "VergeCloud DNS management simplifies SPF record maintenance.",
-    "SPF DNS lookup count": "SPF flattening keeps you inside the 10-lookup RFC limit.",
-    "DMARC policy": "VergeCloud can host DMARC records and aggregate reporting endpoints.",
-    "AAAA record (IPv6)": "VergeCloud ADNS is dual-stack (IPv4 + IPv6) by default.",
-    "IPv6 (AAAA) on nameservers": "VergeCloud nameservers are dual-stack.",
-    "CNAME at apex": "VergeCloud ADNS supports apex aliasing without violating RFC 1034.",
-    "Expiry": "Renewal is handled at your registrar — VergeCloud can alert on approaching expiry.",
+# B36 — remediation guidance is a Remediation(general, vendor) pair, not
+# a plain string. Rule 7 (vendor neutrality) is enforced at the data-
+# model level: the reader always sees the general RFC / protocol fix
+# first, and the VergeCloud rider — when it exists — is rendered as a
+# secondary line. Adding a new entry that leads with a vendor name in
+# `general` trips `test_remediation_vendor_neutrality.py`.
+REMEDIATION: dict[str, Remediation] = {
+    "DNSSEC status": Remediation(
+        general="Sign your zone at your current DNS provider. Most "
+                "managed DNS platforms offer one-click DNSSEC signing; "
+                "after signing, upload the DS record to your registrar "
+                "and confirm the chain validates end-to-end (RFC 4033).",
+        vendor="VergeCloud ADNS supports one-click DNSSEC signing with "
+               "managed key rollover.",
+    ),
+    "Nameserver count": Remediation(
+        general="Publish at least two authoritative nameservers on "
+                "diverse networks (RFC 2182). A single NS is a hard "
+                "single point of failure; two NSes on the same provider "
+                "share fate.",
+        vendor="VergeCloud ADNS provides a redundant anycast "
+               "nameserver set by default.",
+    ),
+    "Parent delegation vs zone NS": Remediation(
+        general="Ensure the NS records at the parent zone match the "
+                "NS RRset served by the child zone (RFC 1034 §4.2). "
+                "Ask your registrar to update the delegation to the "
+                "current authoritative NS set.",
+        vendor="VergeCloud onboarding validates parent-side delegation "
+               "against the served zone before cutover.",
+    ),
+    "Nameserver reachability": Remediation(
+        general="Verify every published NS answers UDP/53 and TCP/53 "
+                "for this zone from multiple vantage points. Retire "
+                "any NS that has been unreachable — silent lame "
+                "delegation degrades resolution reliability.",
+        vendor="VergeCloud anycast removes single-node reachability "
+               "failure.",
+    ),
+    "Network diversity": Remediation(
+        general="Spread nameservers across distinct ASNs and physical "
+                "regions. All NS on one operator, one ASN, or one "
+                "city is a shared-fate single point of failure.",
+        vendor="VergeCloud ADNS runs across a distributed anycast "
+               "network.",
+    ),
+    "CAA record": Remediation(
+        general="Publish a CAA record naming the CA(s) authorised to "
+                "issue for this domain (RFC 8659). Any managed DNS "
+                "provider supports CAA; the record is a one-line "
+                "wire-format entry.",
+        vendor="VergeCloud ADNS lets you publish CAA policy from the "
+               "same control panel.",
+    ),
+    "SPF": Remediation(
+        general="Publish a single SPF record at the apex listing the "
+                "hosts / services that legitimately send mail for "
+                "this domain (RFC 7208). Terminate with `-all` in "
+                "production once you're confident in the include list.",
+        vendor="VergeCloud DNS management simplifies SPF record "
+               "maintenance.",
+    ),
+    "SPF DNS lookup count": Remediation(
+        general="RFC 7208 §4.6.4 caps SPF evaluation at 10 DNS "
+                "lookups. Flatten `include:` chains or consolidate "
+                "senders to stay under the limit — SPF above the "
+                "cap is treated as PermError, which some receivers "
+                "reject outright.",
+    ),
+    "DMARC policy": Remediation(
+        general="Publish a DMARC record at `_dmarc.<domain>` (RFC "
+                "7489). Start at `p=none` with `rua=` reporting, then "
+                "tighten to `quarantine` and `reject` once the "
+                "reports show only legitimate senders passing.",
+        vendor="VergeCloud can host DMARC records and aggregate "
+               "reporting endpoints.",
+    ),
+    "AAAA record (IPv6)": Remediation(
+        general="Publish an AAAA record at the apex. IPv6-only "
+                "clients (mobile networks, some enterprise WANs) "
+                "cannot reach an A-only host directly; the "
+                "workaround is NAT64/DNS64 at the receiver's ISP, "
+                "which is out of your control.",
+        vendor="VergeCloud ADNS is dual-stack (IPv4 + IPv6) by "
+               "default.",
+    ),
+    "IPv6 (AAAA) on nameservers": Remediation(
+        general="Ensure every authoritative nameserver has AAAA "
+                "glue and answers over IPv6. IPv6-only resolvers "
+                "cannot reach IPv4-only NSes.",
+        vendor="VergeCloud nameservers are dual-stack.",
+    ),
+    "CNAME at apex": Remediation(
+        general="RFC 1034 §3.6.2 forbids a CNAME alongside other "
+                "records at a zone apex. Convert to an A/AAAA "
+                "record, or use an ALIAS / ANAME record type if "
+                "your DNS provider supports one — most do.",
+        vendor="VergeCloud ADNS supports apex aliasing without "
+               "violating RFC 1034.",
+    ),
+    "Expiry": Remediation(
+        general="Renew the domain at your registrar and enable "
+                "auto-renew if available. A lapsed domain is the "
+                "worst common outage class — recovery involves "
+                "registrar support tickets and can span days.",
+        vendor="VergeCloud can alert on approaching expiry.",
+    ),
 }
 
 
@@ -67,7 +210,14 @@ def render(rep, show_info=True, as_json=False, strict=False):
     header = Text()
     header.append(f"{name}\n", style="bold white")
     header.append("Overall posture: ", style="dim")
-    header.append(f"{g['overall']}", style=GRADE_COLOR[g["overall"]])
+    # B6: "—" is the not-gradeable sentinel produced when a run had
+    # zero scored findings (network was broken, no data reached the
+    # grade function). Render it as the descriptive phrase so a reader
+    # sees "no data" rather than an ambiguous em-dash.
+    if g["overall"] == "—":
+        header.append("Not gradeable", style="dim")
+    else:
+        header.append(f"{g['overall']}", style=GRADE_COLOR[g["overall"]])
     if g.get("correctness_grade") and g["correctness_grade"] != "—":
         header.append("    Correctness: ", style="dim")
         header.append(f"{g['correctness_grade']}",
@@ -79,6 +229,18 @@ def render(rep, show_info=True, as_json=False, strict=False):
     if g.get("provisional"):
         header.append("  (provisional)", style="yellow")
     header.append(f"\nChecked as of {ts}", style="dim")
+    # L2: when correctness and hardening diverge, the two-letter header
+    # ("Correctness: A · Hardening: C") is opaque — the user reads the
+    # worse letter as "broken" without knowing which optional features
+    # accounted for the gap. Name them explicitly so the grade is
+    # decodable. Silent on a matching sub-grade (nothing to explain).
+    gaps = g.get("hardening_gaps") or []
+    if gaps and g.get("correctness_grade") != g.get("hardening_grade"):
+        header.append(
+            f"\nⓘ Hardening reflects optional-feature adoption; "
+            f"not adopted: {', '.join(gaps)}",
+            style="dim",
+        )
     if rep.degraded:
         header.append(f"\n⚠ Degraded modules (incomplete data): {', '.join(rep.degraded)}",
                       style="yellow")
@@ -88,6 +250,17 @@ def render(rep, show_info=True, as_json=False, strict=False):
     if g.get("unknown_in"):
         header.append(f"\n⚠ Unresolved checks in: {', '.join(g['unknown_in'])}",
                       style="yellow")
+    # L1: the environment self-test computes actionable notes ("UDP/53 is
+    # intercepted", "TCP/53 is blocked") but until now the CLI only
+    # showed a small "(provisional)" tag — easy to miss on a busy
+    # terminal. Surface the specific reasons so the user knows the
+    # provisional grade is a *network* failure, not a domain failure.
+    env_notes = rep.data.get("environment", {}).get("notes") or []
+    if env_notes:
+        header.append("\n⚠ Self-test warnings (network path unreliable):",
+                      style="bold yellow")
+        for n in env_notes:
+            header.append(f"\n   • {n}", style="yellow")
     console.print(Panel(header, title="Domain Posture Check", border_style="cyan"))
 
     # ---- sections
@@ -123,10 +296,17 @@ def render(rep, show_info=True, as_json=False, strict=False):
         t.add_column("Issue", width=34)
         t.add_column("What it means / next step", overflow="fold")
         for f in issues:
-            fix = REMEDIATION.get(f.label, "")
+            rem = REMEDIATION.get(f.label)
             txt = f.why or f.detail
-            if fix:
-                txt += f"\n[cyan]→ {fix}[/cyan]"
+            # B36 — rule 7: general fix first, vendor rider secondary.
+            # The two lines carry different colours so the reader can
+            # tell the RFC-agnostic remediation apart from the vendor-
+            # specific augmentation at a glance.
+            if rem is not None:
+                if rem.general:
+                    txt += f"\n[cyan]→ {rem.general}[/cyan]"
+                if rem.vendor:
+                    txt += f"\n[dim cyan]  ↳ {rem.vendor}[/dim cyan]"
             t.add_row(STATUS_STYLE[f.status][0], f.label, txt)
         console.print(Panel(t, title="[bold]Findings — worst first[/]", title_align="left",
                             border_style="red"))
@@ -166,6 +346,9 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv=None):
     ap = _build_parser()
     args = ap.parse_args(argv)
+
+    # S8: warn on first invocation that we probe third-party infra.
+    _maybe_show_first_run_banner()
 
     try:
         rep = run(args.domain, dkim_selectors=args.dkim_selector, skip_asn=args.skip_asn)

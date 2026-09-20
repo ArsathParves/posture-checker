@@ -145,16 +145,22 @@ def test_dnssec_broken_stays_in_correctness():
     rep = Report(domain_input="dnssec-failed.org", domain="dnssec-failed.org")
     rep.data["ns_map"] = {}
 
-    orig = checks.dnsmod.dnssec_status
+    orig_dnssec = checks.dnsmod.dnssec_status
+    orig_nsec = checks.dnsmod.nsec_type
+    orig_cds = checks.dnsmod.cds_cdnskey_status
     checks.dnsmod.dnssec_status = lambda d: {
         "state": "broken", "ds": True, "dnskey": False,
         "self_signed": None, "ds_matches_dnskey": False,
         "ad_authenticated": False, "algorithms": [], "notes": [],
     }
+    checks.dnsmod.nsec_type = lambda d: {"ok": False, "error": "stub"}
+    checks.dnsmod.cds_cdnskey_status = lambda d: {"ok": False, "error": "stub"}
     try:
         checks._dnssec(rep, "dnssec-failed.org")
     finally:
-        checks.dnsmod.dnssec_status = orig
+        checks.dnsmod.dnssec_status = orig_dnssec
+        checks.dnsmod.nsec_type = orig_nsec
+        checks.dnsmod.cds_cdnskey_status = orig_cds
 
     dnssec = [f for f in rep.findings if f.label == "DNSSEC status"]
     assert dnssec, "expected a DNSSEC status finding"

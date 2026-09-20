@@ -15,20 +15,23 @@
 </header>
 
 <main class="wrap">
+  <div id="envBanner" class="env-banner hidden" role="alert" aria-live="polite"></div>
+
   <form id="checkForm" autocomplete="off">
+    <label for="domain" class="sr-only">Domain name to check</label>
     <input type="text" id="domain" name="domain" placeholder="example.com" required autofocus>
     <button type="submit" id="submitBtn">Check</button>
   </form>
 
-  <div id="status" class="status hidden"></div>
+  <div id="status" class="status hidden" role="status" aria-live="polite"></div>
 
   <div id="header" class="report-header hidden">
     <div class="header-domain"></div>
-    <div class="header-grade"></div>
+    <div class="header-grade" aria-live="polite"></div>
     <div class="header-meta"></div>
   </div>
 
-  <div id="sections"></div>
+  <div id="sections" aria-live="polite" aria-relevant="additions"></div>
 
   <div id="footer" class="footer hidden">
     <p>Prototype. Results are a point-in-time snapshot of public DNS/RDAP data.
