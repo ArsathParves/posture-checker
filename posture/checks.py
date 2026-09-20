@@ -286,7 +286,8 @@ def _registration(rep: Report, d: str):
         rep.add(S, "Registry hold", "FAIL", ", ".join(hold_hits),
                 "Registry has removed the domain from DNS delegation "
                 "(clientHold/serverHold). The domain will not resolve "
-                "for anyone until the hold is lifted.")
+                "for anyone until the hold is lifted.",
+                severity="CRITICAL")
 
     lifecycle_hits = [s for s in p["status"]
                       if "redemptionperiod" in s.lower()
@@ -297,7 +298,8 @@ def _registration(rep: Report, d: str):
         rep.add(S, "Registry lifecycle", "FAIL", ", ".join(lifecycle_hits),
                 "Domain has been deleted at the registry and is inside "
                 "the grace window before it is dropped and becomes "
-                "available for anyone to register. Renew immediately.")
+                "available for anyone to register. Renew immediately.",
+                severity="CRITICAL")
 
     transfer_hits = [s for s in p["status"]
                      if "pendingtransfer" in s.lower()
@@ -1463,7 +1465,8 @@ def _security(rep: Report, d: str):
             rep.add(S, "Zone transfer (AXFR)", "FAIL", detail,
                     "Nameserver allows anonymous full zone transfer — the entire zone "
                     "(every subdomain and internal host) is exposed to anyone. "
-                    "Restrict AXFR to authorised secondaries only.")
+                    "Restrict AXFR to authorised secondaries only.",
+                    severity="CRITICAL")
         elif tested:
             rep.add(S, "Zone transfer (AXFR)", "PASS",
                     f"Refused by all {len(tested)} tested nameserver(s)")
@@ -1495,7 +1498,8 @@ def _security(rep: Report, d: str):
                 f"Recursive for third-party names: {', '.join(openh)}",
                 "Authoritative nameserver also answers recursive queries for "
                 "arbitrary domains — usable in DNS amplification DDoS attacks. "
-                "Authoritative and recursive roles should be separated.")
+                "Authoritative and recursive roles should be separated.",
+                severity="CRITICAL")
     elif otested:
         # D5: a server that advertises recursion (RA=1) but refused OUR probes
         # is not necessarily safe — a source-subnet-based ACL may still serve
