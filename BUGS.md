@@ -311,13 +311,26 @@ an untested fix cycle regresses faster than it progresses.
 
 # P2 — Missing checks that matter more than some included ones
 
-- [ ] **B20. Subdomain takeover / dangling records — entirely absent.**
-  Arguably the highest-value DNS security check that exists:
-  - CNAME pointing at a deprovisioned cloud resource
-    (`*.s3.amazonaws.com`, `*.azurewebsites.net`, `*.github.io`, etc.)
-  - NS delegation to a nameserver whose own domain is unregistered
-    (= full zone takeover)
-  **Severity when found: CRITICAL.**
+- [x] **B20. Subdomain takeover / dangling records.** ✅ DONE
+  New `posture/takeover.py` module + emission in `_security`:
+  - `nameserver_parent_zone_check` — any NS whose immediate parent
+    is NXDOMAIN fires `Nameserver takeover risk` FAIL /
+    severity=CRITICAL (parent registerable by an attacker → full
+    zone takeover). In-bailiwick NSes are skipped as glue.
+  - `cname_takeover_check` — dangling CNAME (target NXDOMAIN or no
+    A/AAAA) fires `Subdomain takeover risk` FAIL. Severity=CRITICAL
+    when the target sits under a known takeover-vulnerable service
+    (EdOverflow / subzy suffix table: `.s3.amazonaws.com`,
+    `.azurewebsites.net`, `.github.io`, `.herokuapp.com`,
+    `.cloudfront.net`, `.fastly.net`, `.pantheonsite.io`,
+    `.readthedocs.io`, `.ghost.io`, `.surge.sh`, `.shopify.com`,
+    `.myshopify.com`, `.unbouncepages.com`, `.zendesk.com`,
+    `.freshdesk.com`, plus AWS/Azure regional variants).
+  Rule 1 preserved: inconclusive probes (parent-zone timeout, CNAME
+  query error) emit NO finding rather than a false CRITICAL. Rule 5
+  gate: entire block skipped when `env.safe_for_direct_dns` is
+  False. Pinned by `tests/test_subdomain_takeover.py` (14 cases
+  covering both primitives + four integration paths).
 
 - [x] **B21. MX records listed but never validated.** ✅ DONE
   `_records` now runs target-side sanity: IP literals (RFC 1035 §3.3.9
@@ -600,7 +613,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 
 | ID | Status | Pinning tests / notes |
 |---|---|---|
-| B20 | OPEN | Subdomain takeover / dangling records — no check. This is the highest-value P2 gap; a dedicated `posture/takeover.py` module + CRITICAL tier (T2) is a natural pairing. |
+| B20 | DONE | `posture/takeover.py` implements both classes: NS parent-zone hijack (any NS whose parent is NXDOMAIN → CRITICAL) and dangling CNAME (target NXDOMAIN or no A/AAAA → FAIL; CRITICAL when under an EdOverflow/subzy takeover-vulnerable service suffix). Emitted from `_security` gated on `env.safe_for_direct_dns`. Pinned by `tests/test_subdomain_takeover.py` (14 cases). |
 | B21 | DONE | MX target validation added to `_records`: IP literal (RFC 1035 §3.3.9), CNAME target (RFC 2181 §10.3), dangling target — all FAIL with target names in detail. Single MX = WARN redundancy. Null-MX / no-MX exempt. Pinned by `tests/test_mx_target_validation.py` (9 cases). |
 | B22 | DONE | Apex A/AAAA bogon check added to `checks._records`. `_is_bogon_address` uses stdlib `ipaddress` classification (`is_private`, `is_loopback`, `is_link_local`, `is_multicast`, `is_reserved`, `is_unspecified`) plus an explicit RFC 6598 CGN (`100.64/10`) fallback for Python <3.13. Emits `A record bogon check` / `AAAA record bogon check` at FAIL when the finding is non-empty; skipped entirely when the record is absent (rule 1 preserved). Pinned by `tests/test_bogon_private_space.py` (10 cases: RFC 1918, loopback, doc-range, mixed public+private, IPv6 ULA / link-local / doc-range, plus non-regression cases for public IPv4/IPv6 and empty-records). |
 | B23 | DONE | `dnsmod._is_in_bailiwick` + `_query_parent_ns_view` extracts additional-section glue; `parent_delegation` aggregates. `checks._nameservers` emits `Glue records` PASS / FAIL / not-applicable per RFC 1034 §4.2.1. Pinned by `tests/test_glue_record_validation.py`. |

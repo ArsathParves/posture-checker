@@ -5,7 +5,7 @@ import ipaddress
 import re
 from datetime import datetime, timezone
 
-from . import dnsmod, emailauth
+from . import dnsmod, emailauth, takeover
 from .selftest import check_environment
 from .core import Report, ip_rdap, normalize_domain, parse_rdap, rdap_lookup
 
@@ -1530,6 +1530,64 @@ def _security(rep: Report, d: str):
     else:
         rep.add(S, "Open recursive resolver", "UNKNOWN",
                 "Could not complete open-resolver test", "")
+
+    # --- B20: subdomain takeover / dangling records -------------------
+    # Two distinct threats routed through the T2 CRITICAL floor:
+    #   * NS parent-zone hijack — if any NS lives in a NXDOMAIN parent
+    #     zone, that parent is registerable by an attacker who then
+    #     controls DNS for this zone.
+    #   * Dangling CNAME to a takeover-vulnerable service — attacker
+    #     claims the tenant name on the service and serves content
+    #     under this FQDN.
+    # Only emit findings on positive detection; rule 1 forbids firing
+    # on inconclusive probes (parent-zone timeout, CNAME query error).
+    # Rule 5 gate: an intercepted/broken network path can synthesise a
+    # spurious NXDOMAIN for the parent-zone probe or the CNAME target
+    # and turn every zone into a false CRITICAL. `safe_for_direct_dns`
+    # is the strongest available proxy for "the recursive path can be
+    # trusted for existence questions".
+    if not env.get("safe_for_direct_dns", False):
+        return
+    ns_hosts = [h.rstrip(".") for h in ns_map.keys()]
+    if ns_hosts:
+        nstake = takeover.nameserver_parent_zone_check(d, ns_hosts)
+        rep.data["ns_takeover"] = nstake
+        if nstake["any_hijackable"]:
+            hijackable = [(h, r["parent"])
+                          for h, r in nstake["per_ns"].items()
+                          if r["status"] == "unregistered"]
+            detail = "; ".join(
+                f"{h} — parent zone {p!r} is unregistered (NXDOMAIN)"
+                for h, p in hijackable)
+            rep.add(S, "Nameserver takeover risk", "FAIL", detail,
+                    "One or more delegated nameservers live inside a "
+                    "parent zone that is NXDOMAIN. Anyone who registers "
+                    "that parent can attach a nameserver of the same "
+                    "hostname and take over DNS for this zone entirely. "
+                    "Re-delegate to nameservers whose parent zones are "
+                    "actively registered.",
+                    severity="CRITICAL")
+
+    cname = takeover.cname_takeover_check(d)
+    rep.data["cname_takeover"] = cname
+    if cname["dangling"]:
+        target = cname["chain"][-1] if cname["chain"] else "?"
+        if cname["takeover_service"]:
+            rep.add(S, "Subdomain takeover risk", "FAIL",
+                    f"CNAME → {target} is dangling and sits under a "
+                    f"known takeover-vulnerable service "
+                    f"({cname['takeover_service']})",
+                    "The CNAME target has no A/AAAA records and lives "
+                    "under a service where any user can claim tenant "
+                    "names. An attacker can serve arbitrary content on "
+                    "this hostname. Remove the CNAME or reclaim the "
+                    "target resource on the service.",
+                    severity="CRITICAL")
+        else:
+            rep.add(S, "Subdomain takeover risk", "FAIL",
+                    f"CNAME → {target} is dangling (target has no A/AAAA)",
+                    "The CNAME target does not resolve. Remove the "
+                    "CNAME or point it at a target that resolves.")
 
 
 def grade(rep: Report, strict: bool = False) -> dict:

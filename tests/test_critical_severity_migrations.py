@@ -39,6 +39,20 @@ _CLEAN_ENV = {
 }
 
 
+_NO_TAKEOVER = {"cname_present": False, "chain": [], "dangling": False,
+                "takeover_service": None, "error": None}
+
+
+def _stub_takeover(monkeypatch):
+    """Silence the B20 takeover probes so migration tests only see the
+    finding under test. Both probes report clean by default."""
+    monkeypatch.setattr(c.takeover, "nameserver_parent_zone_check",
+                        lambda d, hosts: {"ok": True, "per_ns": {},
+                                           "any_hijackable": False})
+    monkeypatch.setattr(c.takeover, "cname_takeover_check",
+                        lambda d: _NO_TAKEOVER)
+
+
 def _findings(rep, label):
     return [f for f in rep.findings if f.label == label]
 
@@ -65,6 +79,7 @@ def test_axfr_open_is_critical(monkeypatch):
     rep = Report(domain_input="example.com", domain="example.com")
     rep.data["ns_map"] = ns_map
     rep.data["environment"] = _CLEAN_ENV
+    _stub_takeover(monkeypatch)
     c._security(rep, "example.com")
     findings = _findings(rep, "Zone transfer (AXFR)")
     assert findings
@@ -97,6 +112,7 @@ def test_axfr_refused_is_not_critical(monkeypatch):
     rep = Report(domain_input="example.com", domain="example.com")
     rep.data["ns_map"] = ns_map
     rep.data["environment"] = _CLEAN_ENV
+    _stub_takeover(monkeypatch)
     c._security(rep, "example.com")
     findings = _findings(rep, "Zone transfer (AXFR)")
     assert findings
@@ -129,6 +145,7 @@ def test_open_resolver_is_critical(monkeypatch):
     rep = Report(domain_input="example.com", domain="example.com")
     rep.data["ns_map"] = ns_map
     rep.data["environment"] = _CLEAN_ENV
+    _stub_takeover(monkeypatch)
     c._security(rep, "example.com")
     findings = _findings(rep, "Open recursive resolver")
     assert findings
