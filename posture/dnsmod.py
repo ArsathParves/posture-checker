@@ -23,6 +23,7 @@ import dns.flags
 import dns.message
 import dns.name
 import dns.query
+import dns.rcode
 import dns.rdatatype
 import dns.resolver
 
@@ -1014,3 +1015,46 @@ def edns_cookie_support(domain: str, ns_map: dict) -> dict:
         "unsupported": sorted(unsupported),
         "skipped": sorted(skipped),
     }
+
+
+def negative_answer_probe(domain: str) -> dict:
+    """Probe a random label under `domain` and classify the negative
+    answer (B28 — RFC 2308 / 8020).
+
+    A well-configured zone returns RCODE=NXDOMAIN for a name that does
+    not exist. Two failure modes:
+
+      - NOERROR + no answer (NODATA on a random label): the zone is
+        answering as if the name existed with no records of the type
+        queried. Resolvers cache this differently from NXDOMAIN
+        (RFC 8020 §3) — a real correctness signal.
+      - NOERROR + answer: a wildcard match or a lie. Handled by the
+        existing `Wildcard record` finding; this probe just reports it.
+
+    Returns:
+      - {ok, rcode, rcode_name, has_answer}
+      - {ok=False, error} when the probe couldn't run at all
+    """
+    import os
+    probe_label = "_nxprobe-" + os.urandom(4).hex()
+    probe_name = f"{probe_label}.{domain.rstrip('.')}"
+    q = dns.message.make_query(probe_name, "A", use_edns=0, payload=4096)
+    last_err = "no resolvers configured"
+    for res in PUBLIC_RESOLVERS:
+        try:
+            resp = dns.query.udp(q, res, timeout=TIMEOUT)
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+            continue
+        rcode = resp.rcode()
+        try:
+            rcode_name = dns.rcode.to_text(rcode)
+        except Exception:
+            rcode_name = str(rcode)
+        return {
+            "ok": True,
+            "rcode": int(rcode),
+            "rcode_name": rcode_name,
+            "has_answer": bool(resp.answer),
+        }
+    return {"ok": False, "error": last_err}

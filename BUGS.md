@@ -338,10 +338,23 @@ an untested fix cycle regresses faster than it progresses.
   a stale-server signal, not correctness failure); env self-test
   blocks direct DNS → skipped (rule 5); every probe raised → UNKNOWN.
 
-- [ ] **B28. Negative-answer correctness not verified.**
-  No check that the zone returns proper NXDOMAIN (rather than NODATA or a
-  lie) for nonexistent names, or that SOA minimum governs negative caching
-  sanely.
+- [x] **B28. Negative-answer correctness not verified.** ✅ DONE
+  `dnsmod.negative_answer_probe(d)` queries a random `_nxprobe-*.<d>`
+  label and reports `{rcode_name, has_answer}`. `_soa` emits
+  `Negative-answer correctness` inside the wildcard-negative branch
+  only (RFC 8020 §3 correctness signal that resolvers cache
+  differently from NXDOMAIN):
+  - NXDOMAIN → PASS
+  - NOERROR + no answer (NODATA on a name that manifestly should not
+    exist) → WARN, hardening=False — real correctness signal
+  - Probe timed out / SERVFAIL / raised → UNKNOWN (rule 1)
+  - Wildcard returned an answer → no B28 emission; the existing
+    `Wildcard record` WARN is authoritative (avoids double-counting).
+  SOA `minimum`/negative-TTL is already covered by the existing
+  `Minimum / negative TTL` finding and is not duplicated.
+  Pinned by `tests/test_negative_answer.py` (8 cases: unit probe
+  NXDOMAIN/NODATA/wildcard-answer/failure + integration
+  PASS/WARN/wildcard-suppression/UNKNOWN).
 
 - [x] **B29. Records read from recursive resolvers, presented as the domain's
   records.** ✅ DONE (parity leg)
@@ -503,7 +516,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B25 | DONE | CDS/CDNSKEY (RFC 7344/8078) — no check. → `dnsmod.cds_cdnskey_status()` probes apex; `_dnssec` grades automated-rollover adoption and surfaces the RFC 8078 delete signal. |
 | B26 | DONE | Authoritative NS's own TCP/53 support — no check. → `dnsmod.tcp53_support()` probes each NS on TCP/53; `_nameservers` grades PASS / WARN / FAIL, or UNKNOWN when env self-test blocks TCP. |
 | B27 | DONE | EDNS compliance / DNS cookies (RFC 7873) — no check. → `dnsmod.edns_cookie_support()` probes each NS with a COOKIE OPT and grades adoption as a hardening signal. |
-| B28 | OPEN | Negative-answer correctness — no check. |
+| B28 | DONE | Negative-answer correctness (RFC 2308 / 8020) — NXDOMAIN vs NODATA distinguished; wildcard path suppressed to avoid double-count. |
 | B29 | DONE (parity leg) | `authoritative_vs_cached` extended to MX/TXT/CAA/NS. Pinned by `tests/test_authoritative_vs_cached_extended.py` (7 cases). The broader "primary reads from authoritative, resolver as comparison" refactor is a separate future item. |
 | B30 | OPEN | TLS/cert posture — no check. |
 

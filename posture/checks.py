@@ -644,6 +644,30 @@ def _soa(rep: Report, d: str, ns_map: dict):
     else:
         rep.add(S, "Wildcard record", "PASS", "No wildcard detected")
 
+        # B28: negative-answer correctness (RFC 2308 / 8020). Only when
+        # the wildcard finding didn't fire — a wildcard match is
+        # already surfaced above and would double-count here. Rule 1:
+        # unretrievable stays unretrievable, never absent.
+        neg = dnsmod.negative_answer_probe(d)
+        rep.data["negative_answer"] = neg
+        if not neg.get("ok"):
+            rep.add(S, "Negative-answer correctness", "UNKNOWN",
+                    f"Could not probe negative answer "
+                    f"({neg.get('error', 'unknown')}).",
+                    "Retry from an unrestricted vantage point.")
+        elif neg["rcode_name"] == "NXDOMAIN":
+            rep.add(S, "Negative-answer correctness", "PASS",
+                    "Random-label probe returned NXDOMAIN as expected.")
+        elif not neg["has_answer"]:
+            rep.add(S, "Negative-answer correctness", "WARN",
+                    f"Random-label probe returned NOERROR + NODATA "
+                    f"(rcode {neg['rcode_name']}) — expected NXDOMAIN.",
+                    "RFC 8020 §3 makes resolvers cache NODATA and "
+                    "NXDOMAIN differently. Returning NODATA for a name "
+                    "that manifestly does not exist misinforms downstream "
+                    "resolvers and can indicate an empty non-terminal "
+                    "or a broken signer.")
+
 
 def _is_bogon_address(addr: str) -> bool:
     """B22: True if `addr` is an IPv4/IPv6 address that should never
