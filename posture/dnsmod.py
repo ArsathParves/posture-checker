@@ -210,10 +210,30 @@ def probe_each_ns(domain: str, ns_map: dict) -> dict:
 _PARENT_QUERY_MAX = 4
 
 
-def _query_parent_ns_view(domain: str, parent_ns_host: str, parent_ip: str) -> tuple[str, list[str] | None]:
+def _is_in_bailiwick(ns_name: str, zone: str) -> bool:
+    """B23: an NS is "in-bailiwick" when its own name lives under (or
+    equals) the delegated zone. RFC 1034 §4.2.1 requires the parent to
+    supply glue A/AAAA for such NSes — a resolver cannot otherwise
+    reach the NS to ask about the zone (chicken-and-egg).
+
+    Naive `ns_name.endswith(zone)` would false-positive on suffix
+    substring overlaps (`fooexample.com` vs `example.com`). Split into
+    labels and compare tail-first, which is DNS's canonical
+    containment test."""
+    ns_labels = ns_name.lower().rstrip(".").split(".")
+    zone_labels = zone.lower().rstrip(".").split(".")
+    if len(ns_labels) < len(zone_labels):
+        return False
+    return ns_labels[-len(zone_labels):] == zone_labels
+
+
+def _query_parent_ns_view(domain: str, parent_ns_host: str, parent_ip: str
+                          ) -> tuple[str, list[str] | None, dict[str, list[str]]]:
     """Ask one parent NS directly for the child's NS records.
 
-    Returns (host, ns_list) on success, (host, None) on failure. Never raises."""
+    Returns `(host, ns_list, glue)` on success, `(host, None, {})` on
+    failure. `glue` maps in-bailiwick NS names to their A/AAAA glue
+    from the response's additional section (B23). Never raises."""
     try:
         msg = dns.message.make_query(domain, "NS")
         resp = dns.query.udp(msg, parent_ip, timeout=TIMEOUT)
@@ -222,9 +242,17 @@ def _query_parent_ns_view(domain: str, parent_ns_host: str, parent_ip: str) -> t
             if rrset.rdtype == dns.rdatatype.NS:
                 for rr in rrset:
                     ns.append(str(rr).rstrip(".").lower())
-        return parent_ns_host, sorted(set(ns))
+        # B23: glue lives in the additional section. Collect A/AAAA
+        # keyed by owner name. A parent that lists in-bailiwick NSes
+        # but omits their glue is what we're looking for downstream.
+        glue: dict[str, list[str]] = {}
+        for rrset in list(resp.additional):
+            if rrset.rdtype in (dns.rdatatype.A, dns.rdatatype.AAAA):
+                name = str(rrset.name).rstrip(".").lower()
+                glue.setdefault(name, []).extend(str(rr) for rr in rrset)
+        return parent_ns_host, sorted(set(ns)), glue
     except Exception:
-        return parent_ns_host, None
+        return parent_ns_host, None, {}
 
 
 def parent_delegation(domain: str) -> dict:
@@ -273,12 +301,20 @@ def parent_delegation(domain: str) -> dict:
         # Query each parent NS in parallel; each returns its own view of the child's NS set.
         from concurrent.futures import ThreadPoolExecutor
         views: dict[str, list[str]] = {}
+        # B23: aggregate glue from every responding parent NS. Glue is
+        # part of the delegation, so we take the union across views —
+        # a resolver would accept glue from any parent that answered.
+        glue: dict[str, list[str]] = {}
         with ThreadPoolExecutor(max_workers=len(targets)) as ex:
-            for host, ns_list in ex.map(
+            for host, ns_list, view_glue in ex.map(
                 lambda t: _query_parent_ns_view(domain, t[0], t[1]), targets
             ):
                 if ns_list is not None:
                     views[host] = ns_list
+                for name, ips in view_glue.items():
+                    existing = set(glue.get(name, []))
+                    existing.update(ips)
+                    glue[name] = sorted(existing)
 
         if not views:
             return {"ok": False, "error": "parent_query_failed"}
@@ -291,6 +327,7 @@ def parent_delegation(domain: str) -> dict:
             "nameservers": first_view,
             "queried_via": sorted(views.keys()),
             "consensus": consensus,
+            "glue": glue,
         }
         if not consensus:
             result["views"] = views

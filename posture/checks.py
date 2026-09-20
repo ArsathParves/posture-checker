@@ -356,6 +356,36 @@ def _nameservers(rep: Report, d: str, skip_asn=False) -> dict:
                     "Different parent nameservers return different NS sets for this zone. "
                     "Resolvers hitting the stale server(s) will see out-of-date delegation. "
                     "Ask the parent-zone operator to reconcile.")
+
+        # B23: glue-record validation. In-bailiwick NSes (name under
+        # or equal to the zone) MUST have parent-supplied A/AAAA glue
+        # — RFC 1034 §4.2.1. Missing glue = a resolver walking to the
+        # parent learns of an NS with no way to reach it (needs the
+        # zone's own DNS to resolve the NS's address, but that's what
+        # the delegation is supposed to point to). Out-of-bailiwick
+        # NSes need NO glue — resolved via the normal delegation graph.
+        # Rule 1: skip entirely when no in-bailiwick NS exists (not
+        # applicable, not broken).
+        parent_glue = parent.get("glue") or {}
+        in_bailiwick = [ns for ns in parent["nameservers"]
+                        if dnsmod._is_in_bailiwick(ns, d)]
+        if in_bailiwick:
+            missing = [ns for ns in in_bailiwick if not parent_glue.get(ns)]
+            if missing:
+                rep.add(S, "Glue records", "FAIL",
+                        f"In-bailiwick NS without parent-supplied glue: "
+                        f"{', '.join(sorted(missing))}",
+                        "The parent zone lists these nameservers as "
+                        "delegated but does not supply A/AAAA glue for "
+                        "them. A resolver reaching the parent has no "
+                        "way to reach these NSes — resolution depends "
+                        "on cache warmth and can SERVFAIL cold. Ask "
+                        "the registrar to add glue A/AAAA for the "
+                        "listed hosts (RFC 1034 §4.2.1).")
+            else:
+                rep.add(S, "Glue records", "PASS",
+                        f"All {len(in_bailiwick)} in-bailiwick NS have "
+                        f"parent-supplied glue")
     else:
         rep.add(S, "Parent delegation vs zone NS", "UNKNOWN",
                 f"Could not query parent zone ({parent.get('error')})",

@@ -276,10 +276,26 @@ an untested fix cycle regresses faster than it progresses.
   non-empty; skipped entirely on absent records (rule 1). Pinned by
   `tests/test_bogon_private_space.py` (10 cases).
 
-- [ ] **B23. Glue-record validation missing.**
+- [x] **B23. Glue-record validation missing.** ✅ DONE
   For in-bailiwick nameservers (`ns1.example.com` serving `example.com`) the
   parent must supply glue A/AAAA. Missing or inconsistent glue is a genuine
   resolution-fragility bug.
+  **Post-impl:** `dnsmod._is_in_bailiwick` implements RFC 1034 §4.2.1
+  containment (label-tail comparison, not naive suffix match — guards
+  against `fooexample.com` false-positives). `_query_parent_ns_view`
+  extracts A/AAAA glue from the response's additional section;
+  `parent_delegation` unions glue across responding parent NSes so any
+  parent that shipped it counts. `checks._nameservers` emits
+  `Glue records` PASS when every in-bailiwick NS has glue, FAIL naming
+  the specific offending NSes when any is missing. Rule 1 exemption:
+  no in-bailiwick NS → not-applicable, no finding. Out-of-bailiwick NSes
+  never appear in the missing-glue detail. Pinned by
+  `tests/test_glue_record_validation.py` (12 cases: 5 classifier unit
+  cases including case-insensitivity and prefix-overlap guard, 2
+  `_query_parent_ns_view` glue-extraction cases, 5 integration cases
+  covering all in-bailiwick w/ glue → PASS, missing glue → FAIL, all
+  out-of-bailiwick → no finding, mixed only flags in-bailiwick, parent
+  query failed → no finding).
 
 - [ ] **B24. NSEC/NSEC3 zone-enumeration exposure not checked.**
   A DNSSEC zone using NSEC (not NSEC3) permits full zone walking. For BFSI
@@ -458,7 +474,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B20 | OPEN | Subdomain takeover / dangling records — no check. This is the highest-value P2 gap; a dedicated `posture/takeover.py` module + CRITICAL tier (T2) is a natural pairing. |
 | B21 | DONE | MX target validation added to `_records`: IP literal (RFC 1035 §3.3.9), CNAME target (RFC 2181 §10.3), dangling target — all FAIL with target names in detail. Single MX = WARN redundancy. Null-MX / no-MX exempt. Pinned by `tests/test_mx_target_validation.py` (9 cases). |
 | B22 | DONE | Apex A/AAAA bogon check added to `checks._records`. `_is_bogon_address` uses stdlib `ipaddress` classification (`is_private`, `is_loopback`, `is_link_local`, `is_multicast`, `is_reserved`, `is_unspecified`) plus an explicit RFC 6598 CGN (`100.64/10`) fallback for Python <3.13. Emits `A record bogon check` / `AAAA record bogon check` at FAIL when the finding is non-empty; skipped entirely when the record is absent (rule 1 preserved). Pinned by `tests/test_bogon_private_space.py` (10 cases: RFC 1918, loopback, doc-range, mixed public+private, IPv6 ULA / link-local / doc-range, plus non-regression cases for public IPv4/IPv6 and empty-records). |
-| B23 | OPEN | Glue-record consistency — no check. |
+| B23 | DONE | `dnsmod._is_in_bailiwick` + `_query_parent_ns_view` extracts additional-section glue; `parent_delegation` aggregates. `checks._nameservers` emits `Glue records` PASS / FAIL / not-applicable per RFC 1034 §4.2.1. Pinned by `tests/test_glue_record_validation.py`. |
 | B24 | OPEN | NSEC vs NSEC3 zone-walking exposure — no check. |
 | B25 | OPEN | CDS/CDNSKEY (RFC 7344/8078) — no check. |
 | B26 | OPEN | Authoritative NS's own TCP/53 support — no check. |
