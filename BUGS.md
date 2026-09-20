@@ -442,10 +442,25 @@ an untested fix cycle regresses faster than it progresses.
   the broader "primary reads from authoritative" refactor remains a
   separate future rewrite.
 
-- [ ] **B30. TLS/certificate posture missing entirely.**
-  Cert expiry, chain validity, TLS version, HSTS, and whether the served
-  certificate's issuer is permitted by the domain's CAA policy. Low effort,
-  high value, and visitors expect it.
+- [x] **B30. TLS/certificate posture.** ✅ DONE (base tier)
+  New `posture/tlsprobe.py` module + `_tls_posture` section
+  (`SECTIONS[-1] = "TLS & HTTPS"`). Emits:
+  - **Certificate expiry** — PASS ≥30d / WARN 7–30d / FAIL <7d or
+    already expired.
+  - **TLS protocol version** — PASS TLS 1.2 / TLS 1.3; FAIL TLS 1.0
+    / TLS 1.1 (RFC 8996; PCI-DSS §2.2.1).
+  - **HSTS** — PASS with `max-age ≥ 15552000` (6 months); WARN when
+    present with shorter window; WARN + `hardening=True` when
+    absent. Preload/`includeSubDomains` surfaced in detail.
+  Both probes are network-mockable at the `_open_tls_socket` /
+  `requests.get` seams. Rule 1 preserved: any probe failure yields
+  UNKNOWN, never FAIL. Rule 5 preserved: whole section skipped
+  (single UNKNOWN row) when `env.safe_for_direct_dns` is False —
+  MITM CA in trust store would produce false PASS on chain validity.
+  Pinned by `tests/test_tls_posture.py` (18 cases).
+  **Deferred:** CAA-vs-served-issuer alignment (RFC 8659 §3) —
+  needs cert-issuer normalisation against CAA CA identifier strings,
+  more than a one-commit change.
 
 ---
 
@@ -623,7 +638,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B27 | DONE | EDNS compliance / DNS cookies (RFC 7873) — no check. → `dnsmod.edns_cookie_support()` probes each NS with a COOKIE OPT and grades adoption as a hardening signal. |
 | B28 | DONE | Negative-answer correctness (RFC 2308 / 8020) — NXDOMAIN vs NODATA distinguished; wildcard path suppressed to avoid double-count. |
 | B29 | DONE (parity leg) | `authoritative_vs_cached` extended to MX/TXT/CAA/NS. Pinned by `tests/test_authoritative_vs_cached_extended.py` (7 cases). The broader "primary reads from authoritative, resolver as comparison" refactor is a separate future item. |
-| B30 | OPEN | TLS/cert posture — no check. |
+| B30 | PARTIAL | `posture/tlsprobe.py` + `_tls_posture` section emit Certificate expiry (7d/30d thresholds), TLS protocol version (TLS 1.2/1.3 PASS; 1.0/1.1 FAIL per RFC 8996 + PCI-DSS), HSTS (6-month baseline). Rule-5-gated on `safe_for_direct_dns`; UNKNOWN row when the path is untrusted. Pinned by `tests/test_tls_posture.py` (18). Deferred: CAA-vs-served-issuer alignment (RFC 8659 §3). |
 
 ### P3 — Regional / bias / validation
 

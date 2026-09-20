@@ -5,7 +5,7 @@ import ipaddress
 import re
 from datetime import datetime, timezone
 
-from . import dnsmod, emailauth, takeover
+from . import dnsmod, emailauth, takeover, tlsprobe
 from .selftest import check_environment
 from .core import Report, ip_rdap, normalize_domain, parse_rdap, rdap_lookup
 
@@ -60,6 +60,7 @@ SECTIONS = [
     "DNSSEC",
     "Email authentication",
     "Security posture",
+    "TLS & HTTPS",
 ]
 
 # Grade weighting: worst-category-weighted, not a simple average.
@@ -97,6 +98,7 @@ def run(domain_input: str, dkim_selectors=None, skip_asn=False) -> Report:
         ("DNSSEC",                    lambda: _dnssec(rep, d)),
         ("Email authentication",      lambda: _email(rep, d, dkim_selectors)),
         ("Security posture",          lambda: _security(rep, d)),
+        ("TLS & HTTPS",               lambda: _tls_posture(rep, d)),
     ]
     for name, fn in section_steps:
         try:
@@ -168,7 +170,7 @@ def run_streaming(domain_input: str, dkim_selectors=None, skip_asn=False):
                "report": _report_to_dict(rep), "grades": grade(rep)}
         return
 
-    # Same six steps as run(). Yield the section's findings once each returns.
+    # Same section list as run(). Yield the section's findings once each returns.
     section_steps = [
         ("Registration & delegation", lambda: _registration(rep, d)),
         ("Nameserver posture",        lambda: _nameservers(rep, d, skip_asn=skip_asn)),
@@ -177,6 +179,7 @@ def run_streaming(domain_input: str, dkim_selectors=None, skip_asn=False):
         ("DNSSEC",                    lambda: _dnssec(rep, d)),
         ("Email authentication",      lambda: _email(rep, d, dkim_selectors)),
         ("Security posture",          lambda: _security(rep, d)),
+        ("TLS & HTTPS",               lambda: _tls_posture(rep, d)),
     ]
     for name, fn in section_steps:
         t0 = time()
@@ -1588,6 +1591,131 @@ def _security(rep: Report, d: str):
                     f"CNAME → {target} is dangling (target has no A/AAAA)",
                     "The CNAME target does not resolve. Remove the "
                     "CNAME or point it at a target that resolves.")
+
+
+def _tls_posture(rep: Report, d: str):
+    """B30 — TLS/HTTPS serving-plane posture.
+
+    Emits Certificate expiry, TLS protocol version, HSTS. Each probe
+    is normalised to a `{"ok": bool, ...}` shape by `tlsprobe`; here
+    we only translate that into findings.
+
+    Rule 1: any probe that returns `ok=False` yields UNKNOWN for its
+    findings, never FAIL. "We could not connect" and "the service is
+    broken" are permanently distinct here.
+
+    Rule 5: gated on `env.safe_for_direct_dns`. A corporate MITM path
+    would produce false PASS on chain validity because the MITM CA is
+    in the OS trust store — silently misleading the SE. Skip and emit
+    one UNKNOWN row explaining why.
+    """
+    S = "TLS & HTTPS"
+    env = rep.data.get("environment", {})
+    if not env.get("safe_for_direct_dns", False):
+        rep.add(S, "TLS posture", "UNKNOWN",
+                "Skipped — network path is untrusted for TLS probing",
+                "The environment self-test flagged this network path as "
+                "unreliable. A corporate MITM CA in the trust store "
+                "would produce false PASS on chain validity; results "
+                "cannot be trusted here.")
+        return
+
+    tls = tlsprobe.probe_tls(d)
+    rep.data["tls_probe"] = tls
+    hsts = tlsprobe.probe_hsts(d)
+    rep.data["hsts_probe"] = hsts
+
+    # --- certificate expiry --------------------------------------------
+    if not tls.get("ok"):
+        rep.add(S, "Certificate expiry", "UNKNOWN",
+                f"TLS probe failed: {tls.get('error')}",
+                "Certificate freshness could not be determined — this "
+                "check depends on a working TLS handshake to this host.")
+    else:
+        not_after_raw = tls["cert"].get("not_after")
+        if not_after_raw:
+            not_after = datetime.strptime(not_after_raw,
+                                          "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc)
+            days_left = (not_after - datetime.now(timezone.utc)).days
+            if days_left < tlsprobe.CERT_FAIL_DAYS:
+                if days_left < 0:
+                    rep.add(S, "Certificate expiry", "FAIL",
+                            f"expired {abs(days_left)} days ago "
+                            f"({not_after_raw})",
+                            "Serving certificate has expired — every "
+                            "modern browser blocks the site with a "
+                            "hard-fail warning. Renew immediately.")
+                else:
+                    rep.add(S, "Certificate expiry", "FAIL",
+                            f"{days_left} days remaining "
+                            f"({not_after_raw})",
+                            "Certificate expires imminently. Cert-driven "
+                            "outages are the second most common "
+                            "customer-visible outage class after "
+                            "registration lapse.")
+            elif days_left < tlsprobe.CERT_WARN_DAYS:
+                rep.add(S, "Certificate expiry", "WARN",
+                        f"{days_left} days remaining ({not_after_raw})",
+                        "Renewal window approaching. Verify automated "
+                        "renewal is active.")
+            else:
+                rep.add(S, "Certificate expiry", "PASS",
+                        f"{days_left} days remaining ({not_after_raw})")
+        else:
+            rep.add(S, "Certificate expiry", "UNKNOWN",
+                    "Certificate `notAfter` not present in probe result",
+                    "")
+
+    # --- TLS protocol version ------------------------------------------
+    if not tls.get("ok"):
+        rep.add(S, "TLS protocol version", "UNKNOWN",
+                f"TLS probe failed: {tls.get('error')}", "")
+    else:
+        proto = tls.get("protocol") or ""
+        if proto in ("TLSv1.3", "TLSv1.2"):
+            rep.add(S, "TLS protocol version", "PASS",
+                    f"negotiated {proto}")
+        elif proto in ("TLSv1", "TLSv1.1"):
+            rep.add(S, "TLS protocol version", "FAIL",
+                    f"negotiated {proto}",
+                    "RFC 8996 formally deprecates TLS 1.0 and 1.1; "
+                    "PCI-DSS forbids TLS 1.0 for cardholder data. "
+                    "Disable pre-1.2 protocols at the load balancer / "
+                    "web server.")
+        else:
+            rep.add(S, "TLS protocol version", "WARN",
+                    f"negotiated {proto or 'unknown'}",
+                    "Non-standard TLS version reported — verify the "
+                    "server configuration.")
+
+    # --- HSTS (RFC 6797) -----------------------------------------------
+    if not hsts.get("ok"):
+        rep.add(S, "HSTS", "UNKNOWN",
+                f"HTTPS request failed: {hsts.get('error')}",
+                "HSTS state could not be read.")
+    elif not hsts.get("present"):
+        rep.add(S, "HSTS", "WARN",
+                "no Strict-Transport-Security header served",
+                "HSTS instructs browsers to refuse HTTP downgrade for "
+                "this host. Recommended for any site handling "
+                "authenticated sessions.",
+                hardening=True)
+    else:
+        max_age = hsts.get("max_age") or 0
+        if max_age >= tlsprobe.HSTS_BASELINE_MAX_AGE:
+            detail = f"max-age={max_age}"
+            if hsts.get("include_subdomains"):
+                detail += "; includeSubDomains"
+            if hsts.get("preload"):
+                detail += "; preload"
+            rep.add(S, "HSTS", "PASS", detail)
+        else:
+            rep.add(S, "HSTS", "WARN",
+                    f"max-age={max_age} is below the six-month baseline",
+                    "HSTS is present but its safety window is short. "
+                    "Raise `max-age` to at least 15552000 (6 months); "
+                    "31536000 (1 year) is the common production value.")
 
 
 def grade(rep: Report, strict: bool = False) -> dict:
