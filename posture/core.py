@@ -74,6 +74,43 @@ class Finding:
         return self.severity == "CRITICAL"
 
 
+# ---------------------------------------------------------------- remediation
+#
+# B36 — remediation guidance is a two-field structure, not a plain string.
+#
+# CLAUDE.md rule 7 forbids the pattern "every remediation is a VergeCloud
+# sales line" because a tool where every finding routes to "switch
+# vendors" reads as a funnel and burns the credibility the tool exists
+# for. The neutrality mandate is easier to hold if the type system
+# enforces it — a plain-string remediation column lets someone add a
+# vendor-first line six months from now and no test catches it, but a
+# `Remediation(general, vendor)` type forces every new entry to answer
+# "what is the general RFC / protocol fix?" before adding vendor-
+# specific augmentation.
+#
+# The renderer's job is to emit `general` first (primary text) and
+# `vendor`, if present, as a secondary rider. Tests in
+# `test_remediation_vendor_neutrality.py` lock the contract.
+
+
+@dataclass(frozen=True)
+class Remediation:
+    """Remediation guidance for a single finding label.
+
+    `general` — the RFC / protocol / vendor-agnostic fix. Required.
+        This is the primary text the reader acts on regardless of
+        their DNS provider.
+    `vendor` — an OPTIONAL VergeCloud-specific rider naming the
+        product capability that addresses the same issue. Rendered
+        secondary to `general`, visually distinct.
+
+    Frozen so entries can be reused across renderers without a caller
+    accidentally mutating the general-fix text at runtime.
+    """
+    general: str
+    vendor: str = ""
+
+
 @dataclass
 class Report:
     domain_input: str

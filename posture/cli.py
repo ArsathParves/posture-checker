@@ -14,6 +14,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .checks import SECTIONS, grade, run
+from .core import Remediation
 
 
 # S8: first-run banner. The tool makes live queries against real third-
@@ -76,21 +77,113 @@ STATUS_STYLE = {
 GRADE_COLOR = {"A": "bold green", "B": "green", "C": "yellow", "D": "orange3",
                "F": "bold red", "—": "dim"}
 
-# Each failing finding maps to the VergeCloud capability that addresses it.
-REMEDIATION = {
-    "DNSSEC status": "VergeCloud ADNS supports one-click DNSSEC signing with managed key rollover.",
-    "Nameserver count": "VergeCloud ADNS provides a redundant anycast nameserver set by default.",
-    "Parent delegation vs zone NS": "VergeCloud onboarding validates parent-side delegation against the served zone.",
-    "Nameserver reachability": "VergeCloud anycast removes single-node reachability failure.",
-    "Network diversity": "VergeCloud ADNS runs across a distributed anycast network.",
-    "CAA record": "VergeCloud ADNS lets you publish CAA policy from the same control panel.",
-    "SPF": "VergeCloud DNS management simplifies SPF record maintenance.",
-    "SPF DNS lookup count": "SPF flattening keeps you inside the 10-lookup RFC limit.",
-    "DMARC policy": "VergeCloud can host DMARC records and aggregate reporting endpoints.",
-    "AAAA record (IPv6)": "VergeCloud ADNS is dual-stack (IPv4 + IPv6) by default.",
-    "IPv6 (AAAA) on nameservers": "VergeCloud nameservers are dual-stack.",
-    "CNAME at apex": "VergeCloud ADNS supports apex aliasing without violating RFC 1034.",
-    "Expiry": "Renewal is handled at your registrar — VergeCloud can alert on approaching expiry.",
+# B36 — remediation guidance is a Remediation(general, vendor) pair, not
+# a plain string. Rule 7 (vendor neutrality) is enforced at the data-
+# model level: the reader always sees the general RFC / protocol fix
+# first, and the VergeCloud rider — when it exists — is rendered as a
+# secondary line. Adding a new entry that leads with a vendor name in
+# `general` trips `test_remediation_vendor_neutrality.py`.
+REMEDIATION: dict[str, Remediation] = {
+    "DNSSEC status": Remediation(
+        general="Sign your zone at your current DNS provider. Most "
+                "managed DNS platforms offer one-click DNSSEC signing; "
+                "after signing, upload the DS record to your registrar "
+                "and confirm the chain validates end-to-end (RFC 4033).",
+        vendor="VergeCloud ADNS supports one-click DNSSEC signing with "
+               "managed key rollover.",
+    ),
+    "Nameserver count": Remediation(
+        general="Publish at least two authoritative nameservers on "
+                "diverse networks (RFC 2182). A single NS is a hard "
+                "single point of failure; two NSes on the same provider "
+                "share fate.",
+        vendor="VergeCloud ADNS provides a redundant anycast "
+               "nameserver set by default.",
+    ),
+    "Parent delegation vs zone NS": Remediation(
+        general="Ensure the NS records at the parent zone match the "
+                "NS RRset served by the child zone (RFC 1034 §4.2). "
+                "Ask your registrar to update the delegation to the "
+                "current authoritative NS set.",
+        vendor="VergeCloud onboarding validates parent-side delegation "
+               "against the served zone before cutover.",
+    ),
+    "Nameserver reachability": Remediation(
+        general="Verify every published NS answers UDP/53 and TCP/53 "
+                "for this zone from multiple vantage points. Retire "
+                "any NS that has been unreachable — silent lame "
+                "delegation degrades resolution reliability.",
+        vendor="VergeCloud anycast removes single-node reachability "
+               "failure.",
+    ),
+    "Network diversity": Remediation(
+        general="Spread nameservers across distinct ASNs and physical "
+                "regions. All NS on one operator, one ASN, or one "
+                "city is a shared-fate single point of failure.",
+        vendor="VergeCloud ADNS runs across a distributed anycast "
+               "network.",
+    ),
+    "CAA record": Remediation(
+        general="Publish a CAA record naming the CA(s) authorised to "
+                "issue for this domain (RFC 8659). Any managed DNS "
+                "provider supports CAA; the record is a one-line "
+                "wire-format entry.",
+        vendor="VergeCloud ADNS lets you publish CAA policy from the "
+               "same control panel.",
+    ),
+    "SPF": Remediation(
+        general="Publish a single SPF record at the apex listing the "
+                "hosts / services that legitimately send mail for "
+                "this domain (RFC 7208). Terminate with `-all` in "
+                "production once you're confident in the include list.",
+        vendor="VergeCloud DNS management simplifies SPF record "
+               "maintenance.",
+    ),
+    "SPF DNS lookup count": Remediation(
+        general="RFC 7208 §4.6.4 caps SPF evaluation at 10 DNS "
+                "lookups. Flatten `include:` chains or consolidate "
+                "senders to stay under the limit — SPF above the "
+                "cap is treated as PermError, which some receivers "
+                "reject outright.",
+    ),
+    "DMARC policy": Remediation(
+        general="Publish a DMARC record at `_dmarc.<domain>` (RFC "
+                "7489). Start at `p=none` with `rua=` reporting, then "
+                "tighten to `quarantine` and `reject` once the "
+                "reports show only legitimate senders passing.",
+        vendor="VergeCloud can host DMARC records and aggregate "
+               "reporting endpoints.",
+    ),
+    "AAAA record (IPv6)": Remediation(
+        general="Publish an AAAA record at the apex. IPv6-only "
+                "clients (mobile networks, some enterprise WANs) "
+                "cannot reach an A-only host directly; the "
+                "workaround is NAT64/DNS64 at the receiver's ISP, "
+                "which is out of your control.",
+        vendor="VergeCloud ADNS is dual-stack (IPv4 + IPv6) by "
+               "default.",
+    ),
+    "IPv6 (AAAA) on nameservers": Remediation(
+        general="Ensure every authoritative nameserver has AAAA "
+                "glue and answers over IPv6. IPv6-only resolvers "
+                "cannot reach IPv4-only NSes.",
+        vendor="VergeCloud nameservers are dual-stack.",
+    ),
+    "CNAME at apex": Remediation(
+        general="RFC 1034 §3.6.2 forbids a CNAME alongside other "
+                "records at a zone apex. Convert to an A/AAAA "
+                "record, or use an ALIAS / ANAME record type if "
+                "your DNS provider supports one — most do.",
+        vendor="VergeCloud ADNS supports apex aliasing without "
+               "violating RFC 1034.",
+    ),
+    "Expiry": Remediation(
+        general="Renew the domain at your registrar and enable "
+                "auto-renew if available. A lapsed domain is the "
+                "worst common outage class — recovery involves "
+                "registrar support tickets and can span days.",
+        vendor="VergeCloud can alert on approaching expiry.",
+    ),
 }
 
 
@@ -203,10 +296,17 @@ def render(rep, show_info=True, as_json=False, strict=False):
         t.add_column("Issue", width=34)
         t.add_column("What it means / next step", overflow="fold")
         for f in issues:
-            fix = REMEDIATION.get(f.label, "")
+            rem = REMEDIATION.get(f.label)
             txt = f.why or f.detail
-            if fix:
-                txt += f"\n[cyan]→ {fix}[/cyan]"
+            # B36 — rule 7: general fix first, vendor rider secondary.
+            # The two lines carry different colours so the reader can
+            # tell the RFC-agnostic remediation apart from the vendor-
+            # specific augmentation at a glance.
+            if rem is not None:
+                if rem.general:
+                    txt += f"\n[cyan]→ {rem.general}[/cyan]"
+                if rem.vendor:
+                    txt += f"\n[dim cyan]  ↳ {rem.vendor}[/dim cyan]"
             t.add_row(STATUS_STYLE[f.status][0], f.label, txt)
         console.print(Panel(t, title="[bold]Findings — worst first[/]", title_align="left",
                             border_style="red"))
