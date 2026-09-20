@@ -652,10 +652,14 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B36 | DONE | `posture/core.Remediation(general, vendor)` dataclass is the data-model contract for CLAUDE.md rule 7. Every entry in `posture/cli.REMEDIATION` is now a `Remediation` instance with a REQUIRED `general` field (the RFC / protocol-agnostic fix) and an OPTIONAL `vendor` rider (the VergeCloud capability, rendered secondary). Adding a new label that leads with a vendor name in `general` trips the neutrality test at import time. CLI renderer emits `general` first in cyan (`→ ...`) and `vendor` second in dim cyan (`  ↳ ...`) so a reader can visually distinguish the RFC fix from the vendor augmentation. Pinned by `tests/test_remediation_vendor_neutrality.py` (9 cases: dataclass shape + required `general` + default-empty `vendor` + every table entry typed + non-empty general + no-vendor-in-general-head + vendor riders are vendor-led + render order + general-only render). |
 | B37 | DONE | Consensus reads via `parent_delegation` (D2), A/AAAA authoritative cross-check (D5), per-run environment self-test (rule 5), and now `dnsmod.cross_resolver_dnskey` querying every PUBLIC_RESOLVER and comparing DNSKEY sets. `_dnssec` emits PASS/WARN/UNKNOWN with T5 confidence tiers (`high`/`medium`/`""`) — hardening=True so divergence never tanks correctness. Pinned by `tests/test_cross_resolver_dnskey.py` (8 cases). TXT-level cross-resolver consensus for SPF/DMARC is future work — `authoritative_vs_cached` already covers TXT parity between an authoritative and a resolver read. |
 
-**Summary:** of 43 items, 28 are pinned DONE (including B28 negative-answer
-correctness, T6 structured logging, B31 multi-vantage ECS geo-steering
-detection, and T2 CRITICAL severity-tier mechanism), 6 PARTIAL (subset
-shipped), 2 WITHDRAWN, and 7 OPEN. See `AUDIT.md` for the newer,
-prioritised remediation ledger — the two files intentionally overlap
-because BUGS.md is the raw work-queue history and AUDIT.md is the current
-sweep.
+**Summary:** of 43 items, 42 are pinned DONE (including the T1 stable
+`finding_id` mechanism, the B33 SPOF-removed self-test, the B30 CAA/cert-
+issuer alignment, and the B36 vendor-neutrality data model), 1 is
+WITHDRAWN (B11, RFC 7208 §4.6.4 misread), and 0 remain OPEN. Two
+entries carry a scope suffix — B29 "DONE (parity leg)" and T5 "DONE
+(mechanism)" — indicating the shipped fix closes the specific
+correctness/mechanism claim while a follow-up (broader refactor / emit-
+site migration) is documented in-row rather than in a new ticket. See
+`AUDIT.md` for the newer, prioritised remediation ledger — the two
+files intentionally overlap because BUGS.md is the raw work-queue
+history and AUDIT.md is the current sweep.
