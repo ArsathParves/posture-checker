@@ -328,9 +328,15 @@ an untested fix cycle regresses faster than it progresses.
   (hardening=False, real breakage path for DNSKEY/large TXT); zero
   accept → FAIL; env self-test blocks TCP → UNKNOWN (rule 5).
 
-- [ ] **B27. EDNS compliance / DNS cookie support not tested (RFC 7873).**
+- [x] **B27. EDNS compliance / DNS cookie support not tested (RFC 7873).** ✅ DONE.
   Nameservers mishandling EDNS or lacking cookies are more exploitable in
-  amplification and spoofing.
+  amplification and spoofing. Fixed via `dnsmod.edns_cookie_support()`
+  which sends an EDNS0 COOKIE option to each authoritative NS and
+  checks whether the response echoes a COOKIE OPT. `_nameservers`
+  emits `DNS cookie support`: all NS echo cookies → PASS (hardening);
+  any NS without cookies → WARN hardening=True (optional per RFC 7873;
+  a stale-server signal, not correctness failure); env self-test
+  blocks direct DNS → skipped (rule 5); every probe raised → UNKNOWN.
 
 - [ ] **B28. Negative-answer correctness not verified.**
   No check that the zone returns proper NXDOMAIN (rather than NODATA or a
@@ -496,7 +502,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B24 | DONE | NSEC vs NSEC3 zone-walking exposure — no check. → `dnsmod.nsec_type()` probes authority section; `_dnssec` grades NSEC/NSEC3 iterations per RFC 9276. |
 | B25 | DONE | CDS/CDNSKEY (RFC 7344/8078) — no check. → `dnsmod.cds_cdnskey_status()` probes apex; `_dnssec` grades automated-rollover adoption and surfaces the RFC 8078 delete signal. |
 | B26 | DONE | Authoritative NS's own TCP/53 support — no check. → `dnsmod.tcp53_support()` probes each NS on TCP/53; `_nameservers` grades PASS / WARN / FAIL, or UNKNOWN when env self-test blocks TCP. |
-| B27 | OPEN | EDNS compliance / DNS cookies (RFC 7873) — no check. |
+| B27 | DONE | EDNS compliance / DNS cookies (RFC 7873) — no check. → `dnsmod.edns_cookie_support()` probes each NS with a COOKIE OPT and grades adoption as a hardening signal. |
 | B28 | OPEN | Negative-answer correctness — no check. |
 | B29 | DONE (parity leg) | `authoritative_vs_cached` extended to MX/TXT/CAA/NS. Pinned by `tests/test_authoritative_vs_cached_extended.py` (7 cases). The broader "primary reads from authoritative, resolver as comparison" refactor is a separate future item. |
 | B30 | OPEN | TLS/cert posture — no check. |

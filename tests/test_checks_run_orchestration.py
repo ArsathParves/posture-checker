@@ -164,6 +164,10 @@ def fake_dns(monkeypatch):
                         lambda d, m: {"ok": True, "all_supported": True,
                                       "supported": list(m),
                                       "unsupported": [], "skipped": []})
+    monkeypatch.setattr(chk.dnsmod, "edns_cookie_support",
+                        lambda d, m: {"ok": True, "all_supported": True,
+                                      "supported": list(m),
+                                      "unsupported": [], "skipped": []})
     monkeypatch.setattr(chk.dnsmod, "get_soa", _fake_get_soa)
     monkeypatch.setattr(chk.dnsmod, "query", _fake_query_absent)
     monkeypatch.setattr(chk.dnsmod, "dnssec_status", _fake_dnssec_not_configured)

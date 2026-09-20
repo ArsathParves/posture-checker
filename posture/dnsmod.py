@@ -952,3 +952,65 @@ def tcp53_support(domain: str, ns_map: dict) -> dict:
         "unsupported": sorted(unsupported),
         "skipped": sorted(skipped),
     }
+
+
+def edns_cookie_support(domain: str, ns_map: dict) -> dict:
+    """Probe each authoritative NS for DNS Cookie support (B27 — RFC 7873).
+
+    Sends an SOA query over UDP with an EDNS0 COOKIE option carrying a
+    client cookie. A cookie-supporting NS echoes back a COOKIE OPT
+    option containing (client cookie || server cookie). Any response
+    without a COOKIE OPT is classified as `unsupported`.
+
+    Returns:
+      - {ok, all_supported, supported: [ns], unsupported: [ns],
+         skipped: [ns]} on success
+      - {ok=False, error} when every probe raised (unretrievable)
+
+    Rule 1: probe-raised is distinct from "responded without COOKIE" —
+    the latter is a real hardening signal; the former is UNKNOWN.
+    """
+    import dns.edns
+    import os
+    client_cookie = os.urandom(8)
+    supported: list[str] = []
+    unsupported: list[str] = []
+    skipped: list[str] = []
+    all_raised = True  # cleared as soon as any probe returns
+    for host, ips in ns_map.items():
+        probe_ips = (ips.get("ipv4") or []) + (ips.get("ipv6") or [])
+        if not probe_ips:
+            skipped.append(host)
+            continue
+        classified = False
+        for ip in probe_ips:
+            opt = dns.edns.GenericOption(
+                dns.edns.OptionType.COOKIE, client_cookie
+            )
+            q = dns.message.make_query(domain, "SOA")
+            q.use_edns(0, options=[opt], payload=4096)
+            try:
+                resp = dns.query.udp(q, ip, timeout=TIMEOUT)
+            except Exception:
+                continue
+            all_raised = False
+            has_cookie = any(
+                getattr(o, "otype", None) == dns.edns.OptionType.COOKIE
+                for o in (resp.options or [])
+            )
+            (supported if has_cookie else unsupported).append(host)
+            classified = True
+            break
+        if not classified:
+            # every IP raised — treat this host as unretrievable, don't
+            # misclassify as unsupported.
+            unsupported.append(host + " (probe failed)")
+    if all_raised and not skipped:
+        return {"ok": False, "error": "all probes raised"}
+    return {
+        "ok": True,
+        "all_supported": bool(supported) and not unsupported,
+        "supported": sorted(supported),
+        "unsupported": sorted(unsupported),
+        "skipped": sorted(skipped),
+    }

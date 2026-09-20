@@ -133,6 +133,10 @@ def _run_nameservers(monkeypatch, tcp_out, env=None):
                                           "serial": 1, "rtt_ms": 10}
                                       for h in m})
     monkeypatch.setattr(c.dnsmod, "tcp53_support", lambda d, m: tcp_out)
+    monkeypatch.setattr(c.dnsmod, "edns_cookie_support",
+                        lambda d, m: {"ok": True, "all_supported": True,
+                                      "supported": list(m),
+                                      "unsupported": [], "skipped": []})
     rep = Report(domain_input="example.com", domain="example.com")
     rep.data["environment"] = env or _CLEAN_ENV
     c._nameservers(rep, "example.com", skip_asn=True)
@@ -223,6 +227,10 @@ def test_env_tcp_blocked_skips_probe(monkeypatch):
     monkeypatch.setattr(c.dnsmod, "parent_delegation",
                         lambda d: {"ok": False, "error": "stub"})
     monkeypatch.setattr(c.dnsmod, "tcp53_support", _spy)
+    monkeypatch.setattr(c.dnsmod, "edns_cookie_support",
+                        lambda d, m: {"ok": True, "all_supported": True,
+                                      "supported": list(m),
+                                      "unsupported": [], "skipped": []})
     rep = Report(domain_input="example.com", domain="example.com")
     rep.data["environment"] = {
         "safe": False, "notes": ["TCP/53 blocked"],

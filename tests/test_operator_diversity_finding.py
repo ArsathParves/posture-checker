@@ -76,6 +76,10 @@ def _install_stubs(monkeypatch, ip_rdap_map: dict[str, dict]):
                         lambda d, m: {"ok": True, "all_supported": True,
                                       "supported": list(m),
                                       "unsupported": [], "skipped": []})
+    monkeypatch.setattr(checks.dnsmod, "edns_cookie_support",
+                        lambda d, m: {"ok": True, "all_supported": True,
+                                      "supported": list(m),
+                                      "unsupported": [], "skipped": []})
 
     def _fake_ip_rdap(ip):
         return ip_rdap_map.get(ip, {"ok": False})

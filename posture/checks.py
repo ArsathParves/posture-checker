@@ -510,6 +510,36 @@ def _nameservers(rep: Report, d: str, skip_asn=False) -> dict:
                     "many MX/SRV) will fail entirely. The zone is broken "
                     "for DNSSEC validation.")
 
+    # B27: DNS Cookie support (RFC 7873). Optional per the RFC but
+    # enabled by default in modern BIND / Knot / PowerDNS — absence is
+    # a hardening gap signalling stale server software, and the cheapest
+    # available defence against off-path spoofing and amplification.
+    if env_safe_tcp:
+        ck = dnsmod.edns_cookie_support(d, ns_map)
+        rep.data["edns_cookies"] = ck
+        if not ck.get("ok"):
+            rep.add(S, "DNS cookie support", "UNKNOWN",
+                    f"Could not probe DNS cookies "
+                    f"({ck.get('error', 'unknown')}).",
+                    "Retry from an unrestricted vantage point.",
+                    hardening=True)
+        elif ck["all_supported"]:
+            rep.add(S, "DNS cookie support", "PASS",
+                    f"All {len(ck['supported'])} nameservers echo "
+                    "DNS cookie option (RFC 7873).",
+                    hardening=True)
+        else:
+            missing = ck["unsupported"] or ["(none)"]
+            rep.add(S, "DNS cookie support", "WARN",
+                    f"Nameservers without RFC 7873 DNS cookie support: "
+                    f"{', '.join(missing)}.",
+                    "DNS cookies are the cheapest defence against "
+                    "off-path spoofing and reflection/amplification. "
+                    "Modern BIND / Knot / PowerDNS enable them by "
+                    "default — absence usually signals stale server "
+                    "software.",
+                    hardening=True)
+
     # provider identification via IP RDAP / ASN (labelled as network operator)
     if not skip_asn:
         # One ip_rdap per NS host — the previous code queried twice per host
