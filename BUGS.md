@@ -592,7 +592,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | T2 | DONE | Mechanism: `Finding.severity` + `Report.add(severity="CRITICAL")` + three-point floor in `checks.grade()` (section, correctness, overall). Rule 1 preserved: CRITICAL UNKNOWN does not floor. Migrated FAIL emissions: AXFR-open, open-recursive-resolver, registry-hold (`clientHold`/`serverHold`), registry-lifecycle (`redemptionPeriod`/`pendingDelete`) — each is a full-zone/full-domain outage class that BFSI SEs must not read as an ordinary FAIL. Pinned by `tests/test_severity_critical_tier.py` (10) + `tests/test_critical_severity_migrations.py` (6). |
 | T3 | DONE | Offline test harness in place — nearly every test patches DNS/RDAP/HTTP entry points. `pytest -m "not network"` passes with zero outbound traffic. Enforced by CI (`.github/workflows/tests.yml`, pinned by `tests/test_ci_workflow.py`). |
 | T4 | PARTIAL | `tests/test_grading_ground_truth.py` pins grade outcomes for cloudflare.com / dnssec-failed.org / vergecloud.com; `tests/test_grading_google_unsigned.py` pins google.com. No full "golden file" per-finding output pin yet — deferred. |
-| T5 | OPEN | Per-finding confidence field not shipped. UI does not surface confidence. |
+| T5 | DONE (mechanism) | Added `Finding.confidence` field (default `""`), `Report.add(confidence=…)` kwarg, `_f2d`/`_report_to_dict` now emit `"confidence"` in the wire format. Grading orthogonality asserted in `tests/test_finding_confidence.py` (8 cases). Migration of specific emit sites to declare `confidence=` is follow-up. |
 | T6 | DONE | JSON `posture/logging.py` + `check_id` correlation through web job lifecycle. Pinned by `tests/test_structured_logging.py` (9 cases). |
 
 ### P0 — Critical

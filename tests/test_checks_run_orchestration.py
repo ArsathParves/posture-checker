@@ -295,7 +295,8 @@ def test_run_streaming_event_order_matches_cli_run(fake_dns):
 
     stream_findings = complete["report"]["findings"]
     run_findings = [{"section": f.section, "label": f.label,
-                     "status": f.status, "detail": f.detail, "why": f.why}
+                     "status": f.status, "detail": f.detail, "why": f.why,
+                     "confidence": f.confidence}
                     for f in rep.findings]
 
     assert stream_findings == run_findings, (

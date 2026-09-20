@@ -52,6 +52,18 @@ class Finding:
     # hardening classification for grading purposes to prevent a
     # "hardening hides critical" false negative.
     severity: str = ""
+    # T5 confidence tier: informational, UI-only. Never fed into grading —
+    # if it were, callers would be tempted to downgrade a broken finding to
+    # `low` to soften the report. Tiers:
+    #   "high"   — authoritative-server read, multi-vantage consensus, or a
+    #              validated cryptographic computation (DS→DNSKEY chain).
+    #   "medium" — single-resolver answer, cached response, or a single-
+    #              probe result agreeing with the tool's expectation.
+    #   "low"    — indirect/inferred signal, or a partial-probe result.
+    #   ""       — default; the caller made no claim.
+    # Migration of specific emit sites to declare `confidence=` is
+    # follow-up work (same shape as T2's mechanism-first pattern).
+    confidence: str = ""
 
     @property
     def is_scored(self) -> bool:
@@ -73,9 +85,9 @@ class Report:
     degraded: list[str] = field(default_factory=list)  # modules that failed
 
     def add(self, section, label, status, detail="", why="",
-            hardening=False, severity=""):
+            hardening=False, severity="", confidence=""):
         self.findings.append(Finding(section, label, status, detail, why,
-                                     hardening, severity))
+                                     hardening, severity, confidence))
 
     def section(self, name: str) -> list[Finding]:
         return [f for f in self.findings if f.section == name]
