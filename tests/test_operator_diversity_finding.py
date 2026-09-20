@@ -72,6 +72,10 @@ def _install_stubs(monkeypatch, ip_rdap_map: dict[str, dict]):
     monkeypatch.setattr(checks.dnsmod, "get_ns_and_ips", _stub_ns_and_ips)
     monkeypatch.setattr(checks.dnsmod, "parent_delegation", _stub_parent_delegation)
     monkeypatch.setattr(checks.dnsmod, "probe_each_ns", _stub_probe_each_ns)
+    monkeypatch.setattr(checks.dnsmod, "tcp53_support",
+                        lambda d, m: {"ok": True, "all_supported": True,
+                                      "supported": list(m),
+                                      "unsupported": [], "skipped": []})
 
     def _fake_ip_rdap(ip):
         return ip_rdap_map.get(ip, {"ok": False})

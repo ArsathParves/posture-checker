@@ -469,6 +469,47 @@ def _nameservers(rep: Report, d: str, skip_asn=False) -> dict:
     elif serials:
         rep.add(S, "SOA serial consistency", "PASS", f"All nameservers at serial {serials.pop()}")
 
+    # B26: authoritative NS's own TCP/53 support (RFC 7766). MUST-level
+    # for every DNS server since 2016; refusal breaks DNSKEY responses,
+    # large TXT sets, and any resolver retrying after a TC flag.
+    # Rule 5: skip when the environment self-test flagged TCP as
+    # untrustworthy — target-side FAIL under a blocked env would be a
+    # false finding.
+    env_safe_tcp = env.get("safe_for_axfr", True) and \
+                   env.get("safe_for_direct_dns", True)
+    if not env_safe_tcp:
+        rep.add(S, "Nameserver TCP/53 support", "UNKNOWN",
+                "Skipped — network path blocks TCP/53",
+                "Cannot probe target's TCP/53 acceptance from a path "
+                "that itself lacks TCP/53 egress. Rerun from an "
+                "unrestricted vantage point.")
+    else:
+        tcp = dnsmod.tcp53_support(d, ns_map)
+        rep.data["tcp53_support"] = tcp
+        if not tcp.get("ok"):
+            rep.add(S, "Nameserver TCP/53 support", "UNKNOWN",
+                    f"Could not probe TCP/53 ({tcp.get('error', 'unknown')}).",
+                    "Retry from an unrestricted vantage point.")
+        elif tcp["all_supported"]:
+            rep.add(S, "Nameserver TCP/53 support", "PASS",
+                    f"All {len(tcp['supported'])} nameservers accept "
+                    "TCP/53 (RFC 7766).")
+        elif tcp["supported"]:
+            rep.add(S, "Nameserver TCP/53 support", "WARN",
+                    f"TCP/53 refused by: {', '.join(tcp['unsupported'])} "
+                    f"(RFC 7766 mandates support).",
+                    "Resolvers retrying over TCP after a truncation flag "
+                    "or fetching DNSKEY records may land on the refusing "
+                    "NS and time out. This produces intermittent failures "
+                    "for large responses (DNSSEC-signed zones, big TXT).")
+        else:
+            rep.add(S, "Nameserver TCP/53 support", "FAIL",
+                    f"No nameservers accept TCP/53: "
+                    f"{', '.join(tcp['unsupported'])} — RFC 7766 requires it.",
+                    "Any response over 512 bytes (DNSKEY, large TXT, "
+                    "many MX/SRV) will fail entirely. The zone is broken "
+                    "for DNSSEC validation.")
+
     # provider identification via IP RDAP / ASN (labelled as network operator)
     if not skip_asn:
         # One ip_rdap per NS host — the previous code queried twice per host

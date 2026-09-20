@@ -319,10 +319,14 @@ an untested fix cycle regresses faster than it progresses.
   additional INFO surfacing the pending unsign; unsigned zone → no
   finding (rule 1); probe failed → UNKNOWN.
 
-- [ ] **B26. Authoritative nameservers' own TCP/53 support not tested.**
+- [x] **B26. Authoritative nameservers' own TCP/53 support not tested.** ✅ DONE.
   DNS requires TCP (RFC 7766). A nameserver answering only UDP breaks large
   responses and DNSSEC. Distinct from the *environment's* TCP block — this
-  tests the target.
+  tests the target. Fixed via `dnsmod.tcp53_support(domain, ns_map)` which
+  probes each NS with a TCP SOA query. `checks._nameservers` emits
+  `Nameserver TCP/53 support`: all NS accept → PASS; some fail → WARN
+  (hardening=False, real breakage path for DNSKEY/large TXT); zero
+  accept → FAIL; env self-test blocks TCP → UNKNOWN (rule 5).
 
 - [ ] **B27. EDNS compliance / DNS cookie support not tested (RFC 7873).**
   Nameservers mishandling EDNS or lacking cookies are more exploitable in
@@ -491,7 +495,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B23 | DONE | `dnsmod._is_in_bailiwick` + `_query_parent_ns_view` extracts additional-section glue; `parent_delegation` aggregates. `checks._nameservers` emits `Glue records` PASS / FAIL / not-applicable per RFC 1034 §4.2.1. Pinned by `tests/test_glue_record_validation.py`. |
 | B24 | DONE | NSEC vs NSEC3 zone-walking exposure — no check. → `dnsmod.nsec_type()` probes authority section; `_dnssec` grades NSEC/NSEC3 iterations per RFC 9276. |
 | B25 | DONE | CDS/CDNSKEY (RFC 7344/8078) — no check. → `dnsmod.cds_cdnskey_status()` probes apex; `_dnssec` grades automated-rollover adoption and surfaces the RFC 8078 delete signal. |
-| B26 | OPEN | Authoritative NS's own TCP/53 support — no check. |
+| B26 | DONE | Authoritative NS's own TCP/53 support — no check. → `dnsmod.tcp53_support()` probes each NS on TCP/53; `_nameservers` grades PASS / WARN / FAIL, or UNKNOWN when env self-test blocks TCP. |
 | B27 | OPEN | EDNS compliance / DNS cookies (RFC 7873) — no check. |
 | B28 | OPEN | Negative-answer correctness — no check. |
 | B29 | DONE (parity leg) | `authoritative_vs_cached` extended to MX/TXT/CAA/NS. Pinned by `tests/test_authoritative_vs_cached_extended.py` (7 cases). The broader "primary reads from authoritative, resolver as comparison" refactor is a separate future item. |

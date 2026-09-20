@@ -905,3 +905,50 @@ def cds_cdnskey_status(domain: str) -> dict:
         "has_cdnskey": has_cdnskey,
         "delete_signal": delete_signal,
     }
+
+
+def tcp53_support(domain: str, ns_map: dict) -> dict:
+    """Probe each authoritative NS on TCP/53 (B26 — RFC 7766).
+
+    RFC 7766 (Mar 2016) upgraded DNS-over-TCP from OPTIONAL to a MUST
+    for every DNS server. A nameserver refusing TCP breaks large
+    responses (DNSKEY, big TXT sets), truncation-flag retry, and any
+    resolver behaviour that falls back to TCP.
+
+    Returns:
+      - {ok, all_supported, supported: [ns], unsupported: [ns],
+         skipped: [ns]} on success
+      - {ok=False, error} on failure to run the probe at all
+
+    Skipped NSes are those with no A/AAAA addresses — distinguished
+    from unsupported so rule 1's not-applicable / unretrievable /
+    broken separation is preserved.
+    """
+    supported: list[str] = []
+    unsupported: list[str] = []
+    skipped: list[str] = []
+    q = dns.message.make_query(domain, "SOA", use_edns=0, payload=4096)
+    for host, ips in ns_map.items():
+        probe_ips = (ips.get("ipv4") or []) + (ips.get("ipv6") or [])
+        if not probe_ips:
+            skipped.append(host)
+            continue
+        # A single successful TCP response is enough — a NS with 2 IPs
+        # where one accepts and one refuses is still resolvable via the
+        # accepting one.
+        ok = False
+        for ip in probe_ips:
+            try:
+                dns.query.tcp(q, ip, timeout=TIMEOUT)
+                ok = True
+                break
+            except Exception:
+                continue
+        (supported if ok else unsupported).append(host)
+    return {
+        "ok": True,
+        "all_supported": bool(supported) and not unsupported,
+        "supported": sorted(supported),
+        "unsupported": sorted(unsupported),
+        "skipped": sorted(skipped),
+    }
