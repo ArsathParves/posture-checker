@@ -953,6 +953,44 @@ def _dnssec(rep: Report, d: str):
         rep.add(S, "Caveat", "INFO",
                 "May be a transient key-rollover state — re-check recommended before acting.")
 
+    # B24: NSEC vs NSEC3 zone-walking exposure. Only relevant when the
+    # zone actually publishes denial-of-existence proofs, i.e. when
+    # DNSSEC is deployed in some form. Unsigned zones have no NSEC/NSEC3
+    # to grade — emitting anything here would be a rule-1 violation
+    # (not-applicable collapsed into a finding).
+    if state != "not_configured":
+        nsec = dnsmod.nsec_type(d)
+        rep.data["nsec"] = nsec
+        if not nsec.get("ok"):
+            rep.add(S, "Zone-walking exposure", "UNKNOWN",
+                    "Could not probe denial-of-existence proofs "
+                    f"({nsec.get('error', 'unknown error')}).",
+                    "Retry from an unrestricted vantage point.")
+        elif nsec["type"] == "NSEC":
+            rep.add(S, "Zone-walking exposure", "WARN",
+                    "Zone uses NSEC — every owner name in the zone can be "
+                    "enumerated by walking the NSEC chain.",
+                    "NSEC (RFC 4034 §4) returns the next existing name in "
+                    "the zone with each negative answer, forming a linked "
+                    "list an attacker can traverse to discover every "
+                    "hostname. Switch to NSEC3 (RFC 5155) at your DNS "
+                    "provider to hash owner names.",
+                    hardening=False)
+        elif nsec["type"] == "NSEC3":
+            iters = nsec.get("iterations", 0)
+            if iters > 100:
+                rep.add(S, "Zone-walking exposure", "WARN",
+                        f"NSEC3 iterations = {iters} — RFC 9276 deprecates "
+                        f"iterations above 100.",
+                        "RFC 9276 (Aug 2022) §3.1 recommends iterations = 0 "
+                        "and formally deprecates high iteration counts. "
+                        "Reduce the signer's NSEC3PARAM iterations to 0.",
+                        hardening=True)
+            else:
+                rep.add(S, "Zone-walking exposure", "PASS",
+                        f"NSEC3 in use, iterations = {iters} "
+                        "(RFC 9276 compliant).")
+
 
 def _email(rep: Report, d: str, dkim_selectors):
     S = "Email authentication"

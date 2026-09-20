@@ -805,3 +805,54 @@ def open_resolver_check(ns_map: dict) -> dict:
         if any_open_probe:
             any_open = True
     return {"any_open": any_open, "per_ns": results}
+
+
+def nsec_type(domain: str) -> dict:
+    """Detect NSEC vs NSEC3 denial-of-existence proofs (B24).
+
+    Send a query for a name that almost certainly does not exist under
+    the zone (random label). A signed zone must return the negative
+    answer authenticated by either an NSEC record (RFC 4034 §4 — walkable
+    linked list) or an NSEC3 record (RFC 5155 — hashed owner names).
+    The presence of NSEC in the authority section marks the zone as
+    walkable; NSEC3 records also expose their iteration count, which
+    RFC 9276 constrains.
+
+    Returns:
+      - {ok: True, type: "NSEC"}
+      - {ok: True, type: "NSEC3", iterations: int}
+      - {ok: True, type: "none"}    — no denial-of-existence record seen
+                                       (unsigned zone, or probe missed)
+      - {ok: False, error: str}     — query failed; downstream emits UNKNOWN
+
+    Never raises. Callers must not collapse ok=False into type=none —
+    CLAUDE.md rule 1.
+    """
+    import os
+    probe_label = "_nsec-probe-" + os.urandom(4).hex()
+    probe_name = f"{probe_label}.{domain.rstrip('.')}"
+    q = dns.message.make_query(probe_name, "A", use_edns=0, payload=4096)
+    q.want_dnssec(True)
+    last_err = "no resolvers configured"
+    for res in PUBLIC_RESOLVERS:
+        try:
+            resp = dns.query.udp(q, res, timeout=TIMEOUT)
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+            continue
+        nsec_seen = False
+        nsec3_iters: int | None = None
+        for rrset in resp.authority:
+            if rrset.rdtype == dns.rdatatype.NSEC:
+                nsec_seen = True
+            elif rrset.rdtype == dns.rdatatype.NSEC3:
+                for rr in rrset:
+                    nsec3_iters = int(rr.iterations)
+                    break
+        if nsec3_iters is not None:
+            return {"ok": True, "type": "NSEC3",
+                    "iterations": nsec3_iters}
+        if nsec_seen:
+            return {"ok": True, "type": "NSEC"}
+        return {"ok": True, "type": "none"}
+    return {"ok": False, "error": last_err}

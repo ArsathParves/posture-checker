@@ -297,9 +297,16 @@ an untested fix cycle regresses faster than it progresses.
   out-of-bailiwick → no finding, mixed only flags in-bailiwick, parent
   query failed → no finding).
 
-- [ ] **B24. NSEC/NSEC3 zone-enumeration exposure not checked.**
+- [x] **B24. NSEC/NSEC3 zone-enumeration exposure not checked.** ✅ DONE.
   A DNSSEC zone using NSEC (not NSEC3) permits full zone walking. For BFSI
-  customers this is a real disclosure risk.
+  customers this is a real disclosure risk. Fixed via `dnsmod.nsec_type()`
+  which probes a random label under the zone and inspects the authority
+  section for NSEC vs NSEC3; `checks._dnssec` emits a `Zone-walking
+  exposure` finding. Grading: NSEC → WARN hardening=False (real,
+  exploitable disclosure); NSEC3 iterations ≤ 100 → PASS (RFC 9276
+  compliant); NSEC3 iterations > 100 → WARN hardening=True (RFC 9276
+  deprecated); unsigned zone → no finding (rule 1); probe failed →
+  UNKNOWN.
 
 - [ ] **B25. No CDS/CDNSKEY check (RFC 7344 / 8078).**
   These signal automated DNSSEC key rollover / DS bootstrapping capability —
@@ -475,7 +482,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B21 | DONE | MX target validation added to `_records`: IP literal (RFC 1035 §3.3.9), CNAME target (RFC 2181 §10.3), dangling target — all FAIL with target names in detail. Single MX = WARN redundancy. Null-MX / no-MX exempt. Pinned by `tests/test_mx_target_validation.py` (9 cases). |
 | B22 | DONE | Apex A/AAAA bogon check added to `checks._records`. `_is_bogon_address` uses stdlib `ipaddress` classification (`is_private`, `is_loopback`, `is_link_local`, `is_multicast`, `is_reserved`, `is_unspecified`) plus an explicit RFC 6598 CGN (`100.64/10`) fallback for Python <3.13. Emits `A record bogon check` / `AAAA record bogon check` at FAIL when the finding is non-empty; skipped entirely when the record is absent (rule 1 preserved). Pinned by `tests/test_bogon_private_space.py` (10 cases: RFC 1918, loopback, doc-range, mixed public+private, IPv6 ULA / link-local / doc-range, plus non-regression cases for public IPv4/IPv6 and empty-records). |
 | B23 | DONE | `dnsmod._is_in_bailiwick` + `_query_parent_ns_view` extracts additional-section glue; `parent_delegation` aggregates. `checks._nameservers` emits `Glue records` PASS / FAIL / not-applicable per RFC 1034 §4.2.1. Pinned by `tests/test_glue_record_validation.py`. |
-| B24 | OPEN | NSEC vs NSEC3 zone-walking exposure — no check. |
+| B24 | DONE | NSEC vs NSEC3 zone-walking exposure — no check. → `dnsmod.nsec_type()` probes authority section; `_dnssec` grades NSEC/NSEC3 iterations per RFC 9276. |
 | B25 | OPEN | CDS/CDNSKEY (RFC 7344/8078) — no check. |
 | B26 | OPEN | Authoritative NS's own TCP/53 support — no check. |
 | B27 | OPEN | EDNS compliance / DNS cookies (RFC 7873) — no check. |
