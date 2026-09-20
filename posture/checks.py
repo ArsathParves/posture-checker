@@ -1837,6 +1837,28 @@ def grade(rep: Report, strict: bool = False) -> dict:
     unknowns = [f.section for f in rep.findings if f.status == "UNKNOWN"]
     provisional = bool(ungraded or unknowns or rep.degraded)
 
+    # B5: reconciliation of per-section grades against overall. Renderers
+    # (CLI header, web SPA) use this to explain why "section A + section
+    # A + section D" does not equal "overall B" — overall is graded on
+    # correctness/hardening buckets across the WHOLE report, not by
+    # section. Ships as data so every renderer reads the same source of
+    # truth and a future change to the 0.8/0.2 weights or CRITICAL floor
+    # is picked up automatically.
+    grade_reconciliation = {
+        "formula": ("overall = round(0.8 * correctness + 0.2 * hardening); "
+                    "any CRITICAL FAIL/WARN floors overall to F"),
+        "correctness_weight": 0.8,
+        "hardening_weight": 0.2,
+        "critical_present": _has_critical(rep.findings),
+        "critical_floors_to": "F",
+        "correctness_findings_count": len(correctness_findings),
+        "hardening_findings_count": len(hardening_scored),
+        "sections_note": ("Per-section grades are informational, "
+                          "not aggregable — overall grades the aggregated "
+                          "correctness and hardening buckets, not a "
+                          "per-section average."),
+    }
+
     # B6: when there is nothing to grade — every scored bucket is empty
     # — `overall` must render as "Not gradeable" ("—"), not fall
     # through to the worst/avg computation which lands on "A" via
@@ -1851,6 +1873,7 @@ def grade(rep: Report, strict: bool = False) -> dict:
                 "correctness_grade": "—",
                 "hardening_grade": "—",
                 "hardening_gaps": [],
+                "grade_reconciliation": grade_reconciliation,
                 "provisional": True,
                 "ungraded_sections": ungraded,
                 "unknown_in": sorted(set(unknowns))}
@@ -1867,6 +1890,7 @@ def grade(rep: Report, strict: bool = False) -> dict:
             "correctness_grade": correctness_grade,
             "hardening_grade": hardening_grade,
             "hardening_gaps": hardening_gaps,
+            "grade_reconciliation": grade_reconciliation,
             "provisional": provisional,
             "ungraded_sections": ungraded,
             "unknown_in": sorted(set(unknowns))}
