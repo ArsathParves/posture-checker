@@ -650,7 +650,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B34 | DONE (via AUDIT D1) | `tests/test_query_cache.py` and `tests/test_query_cache_lru.py` pin TTL + LRU. |
 | B35 | DONE — BUGS.md was stale | AD-bit probe already iterates `PUBLIC_RESOLVERS = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]` and continues on failure (`dnsmod.dnssec_status` line ~446). Pinned by `tests/test_dnssec_ad_fallback.py` (3 cases: fallback on primary failure, all-fail → inconclusive, SERVFAIL → `ad_authenticated=False`). Stale docstring on line 328 named 8.8.8.8 as a singleton — fixed. |
 | B36 | PARTIAL | CLAUDE.md rule 7 (vendor neutrality) is doctrine; remediation copy has been re-worded in-place but a data-model-level "general fix first, vendor secondary" restructure is still open. |
-| B37 | PARTIAL | Consensus reads via `parent_delegation` (D2), authoritative cross-check for A/AAAA (D5), per-run environment self-test (rule 5). Cross-resolver consensus for TXT/DNSKEY and confidence intervals remain unbuilt. |
+| B37 | DONE | Consensus reads via `parent_delegation` (D2), A/AAAA authoritative cross-check (D5), per-run environment self-test (rule 5), and now `dnsmod.cross_resolver_dnskey` querying every PUBLIC_RESOLVER and comparing DNSKEY sets. `_dnssec` emits PASS/WARN/UNKNOWN with T5 confidence tiers (`high`/`medium`/`""`) — hardening=True so divergence never tanks correctness. Pinned by `tests/test_cross_resolver_dnskey.py` (8 cases). TXT-level cross-resolver consensus for SPF/DMARC is future work — `authoritative_vs_cached` already covers TXT parity between an authoritative and a resolver read. |
 
 **Summary:** of 43 items, 28 are pinned DONE (including B28 negative-answer
 correctness, T6 structured logging, B31 multi-vantage ECS geo-steering

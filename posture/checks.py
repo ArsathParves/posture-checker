@@ -1084,6 +1084,39 @@ def _dnssec(rep: Report, d: str):
         rep.add(S, "Caveat", "INFO",
                 "May be a transient key-rollover state — re-check recommended before acting.")
 
+    # B37: cross-resolver DNSKEY consensus. Only meaningful on signed
+    # zones where a DNSKEY set exists to compare — an unsigned zone
+    # has nothing to disagree about (rule 1: not-applicable stays
+    # not-applicable, never collapses into a finding). `unknown`
+    # state means the DNSSEC probe itself was inconclusive; running
+    # this check on top would compound uncertainty.
+    if state in ("validating", "broken", "incomplete"):
+        per_res = dnsmod.cross_resolver_dnskey(d)
+        keysets = [v for v in per_res.values() if v is not None]
+        responded = len(keysets)
+        total = len(per_res)
+        unique = set(keysets)
+        if responded < 2:
+            rep.add(S, "Cross-resolver DNSKEY consensus", "UNKNOWN",
+                    f"Only {responded}/{total} resolvers returned DNSKEY — "
+                    "consensus of one is not consensus.",
+                    "Retry from an unrestricted vantage point.",
+                    hardening=True, confidence="")
+        elif len(unique) == 1:
+            rep.add(S, "Cross-resolver DNSKEY consensus", "PASS",
+                    f"{responded}/{total} public resolvers returned "
+                    "identical DNSKEY sets.",
+                    "", hardening=True, confidence="high")
+        else:
+            rep.add(S, "Cross-resolver DNSKEY consensus", "WARN",
+                    f"{responded}/{total} resolvers disagree on the "
+                    "DNSKEY set — possible cache poisoning, lame "
+                    "resolver, or a rollover the parent has not caught "
+                    "up to.",
+                    "Re-check after cache TTLs elapse. Persistent "
+                    "divergence is worth escalating to the DNS operator.",
+                    hardening=True, confidence="medium")
+
     # B24: NSEC vs NSEC3 zone-walking exposure. Only relevant when the
     # zone actually publishes denial-of-existence proofs, i.e. when
     # DNSSEC is deployed in some form. Unsigned zones have no NSEC/NSEC3

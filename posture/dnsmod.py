@@ -1108,3 +1108,44 @@ def multi_vantage_a(domain: str) -> dict:
         "in_records": in_records,
         "diverges": us_records != in_records,
     }
+
+
+# B37: cross-resolver DNSKEY consensus.
+#
+# `dnssec_status` reads DNSKEY from the FIRST resolver that answers
+# (break-on-first) because it only needs one valid keyset to run the
+# chain-of-trust check. That leaves a real class unobserved: if one
+# public resolver is cache-poisoned or serving a stale zone, the
+# state derivation would not notice — the "one recursive resolver's
+# cached answer" trap CLAUDE.md warns about.
+#
+# This helper queries EVERY PUBLIC_RESOLVER for DNSKEY and returns a
+# per-resolver comparable keyset. Downstream (checks._dnssec) reads
+# the map, counts unique keysets, and emits an INFO/PASS/WARN
+# finding with a T5 confidence tier attached.
+def cross_resolver_dnskey(domain: str) -> dict:
+    """Query DNSKEY at every PUBLIC_RESOLVER; return {resolver_ip:
+    keyset_or_None}. `keyset` is a frozenset of `(algorithm, flags,
+    key_bytes)` tuples — hashable, order-independent, comparable.
+    `None` means the resolver responded but had no DNSKEY answer;
+    an unresponsive resolver also maps to `None` (indistinguishable
+    from the caller's perspective — both mean 'no data')."""
+    out: dict = {}
+    for res in PUBLIC_RESOLVERS:
+        try:
+            q = dns.message.make_query(domain, dns.rdatatype.DNSKEY,
+                                        want_dnssec=True)
+            resp = dns.query.udp(q, res, timeout=TIMEOUT)
+            dnskey_rr = next(
+                (r for r in resp.answer if r.rdtype == dns.rdatatype.DNSKEY),
+                None,
+            )
+            if dnskey_rr is None:
+                out[res] = None
+            else:
+                out[res] = frozenset(
+                    (k.algorithm, k.flags, bytes(k.key)) for k in dnskey_rr
+                )
+        except Exception:
+            out[res] = None
+    return out
