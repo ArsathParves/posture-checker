@@ -171,15 +171,29 @@ an untested fix cycle regresses faster than it progresses.
   SPF, DMARC, DKIM, DNSSEC — the security-critical records.
   **Fix:** one query, inspect its TC flag, retry over TCP on the same path.
 
-- [ ] **B10. SPF `redirect=` counted in violation of RFC 7208 §6.1.**
-  A `redirect` modifier is **ignored entirely if any `all` mechanism is
-  present**. The tool counts and follows it unconditionally, over-counting
-  lookups and potentially producing a false "exceeds 10-lookup limit" FAIL
-  on a valid record.
+- [x] **B10. SPF `redirect=` counted in violation of RFC 7208 §6.1.** ✅ DONE
+  `_count_spf_lookups` computes `has_all = any(term.lower().endswith("all")
+  for term in record.split())` and gates `redirect=` traversal on
+  `if not has_all`. A record like `v=spf1 include:x -all redirect=y`
+  now counts as 1 (the include) rather than 2, matching RFC 7208 §6.1
+  ("if both the redirect modifier and the 'all' mechanism are present,
+  then the redirect modifier is ignored"). Pinned by
+  `tests/test_spf_counting.py::test_redirect_is_ignored_when_all_is_present`
+  and the paired `test_redirect_counts_when_no_all` regression backstop.
 
-- [ ] **B11. SPF `mx` mechanism under-counted (RFC 7208 §4.6.4).**
-  `mx` costs 1 lookup **plus** additional lookups for each MX host's A/AAAA
-  record. The tool counts flat 1. Real over-limit records pass as compliant.
+- [x] **B11. SPF `mx` mechanism — RFC counts confirmed.** ✅ DONE (not a bug)
+  Re-audit against RFC 7208 §4.6.4: the 10-DNS-term primary cap counts
+  each `mx` mechanism as **exactly 1** toward the budget, regardless
+  of how many MX records or A/AAAA lookups it triggers. The A/AAAA
+  lookups are constrained by the separate "MUST limit the number of
+  MX and PTR RRs returned from any single DNS query to 10" secondary
+  cap, not by the primary 10-term budget. Current implementation
+  (`count += 1` per `mx` occurrence) matches mxtoolbox, dmarcian,
+  and opendmarc. Pinned by
+  `tests/test_spf_counting.py::test_bare_mx_counts_as_one_per_rfc_7208_4_6_4`
+  and `test_mx_with_target_counts_as_one_per_rfc_7208_4_6_4`. Original
+  BUGS.md wording (`mx` should cost `1 + #hosts`) was a misreading
+  of §4.6.4.
 
 - [x] **B12. SPF dedup via `seen` set undercounts.** ✅ DONE
   `_count_spf_lookups` now uses per-path cycle detection: `seen` is a
