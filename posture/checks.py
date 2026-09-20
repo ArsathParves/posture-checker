@@ -727,6 +727,60 @@ def _parse_caa_record(line: str) -> tuple[int, str, str] | None:
     return flags, m.group(2).lower(), m.group(3)
 
 
+# B30 (final part) — CAA-vs-served-issuer alignment.
+#
+# The CAA identifier is a DNS label naming a CA operator
+# (e.g. `letsencrypt.org`, `sectigo.com`); the served cert's issuer
+# text is a human-readable string ("Let's Encrypt", "R3", "Sectigo
+# Limited"). These don't line up letter-for-letter — CAs issue under
+# sub-CAs whose CN is a short code, and CAs rebrand (Comodo →
+# Sectigo). A naive substring match on the identifier's stem produces
+# false positives on both sides.
+#
+# The alias table below is deliberately narrow — one row per major
+# public CA seen in the wild. If the CAA identifier does not appear
+# here the check falls back to a stem-substring match, which keeps
+# unknown CAs from producing spurious WARN findings. Adding a row
+# is cheap; false positives are expensive (they burn SE credibility).
+_CA_ALIASES: dict[str, tuple[str, ...]] = {
+    "letsencrypt.org":    ("let's encrypt", "letsencrypt"),
+    "sectigo.com":        ("sectigo", "comodo"),
+    "comodoca.com":       ("sectigo", "comodo"),
+    "digicert.com":       ("digicert", "geotrust", "verisign",
+                           "thawte", "rapidssl"),
+    "pki.goog":           ("gts", "google trust services"),
+    "globalsign.com":     ("globalsign",),
+    "amazon.com":         ("amazon",),
+    "amazontrust.com":    ("amazon",),
+    "godaddy.com":        ("go daddy", "godaddy", "starfield"),
+    "starfieldtech.com":  ("starfield", "go daddy", "godaddy"),
+    "buypass.com":        ("buypass",),
+    "entrust.net":        ("entrust",),
+    "certum.pl":          ("certum", "asseco"),
+    "ssl.com":            ("ssl.com", "ssl corporation"),
+    "trustwave.com":      ("trustwave",),
+    "actalis.com":        ("actalis",),
+}
+
+
+def _caa_identifier_matches_issuer(identifier: str, issuer_blob: str) -> bool:
+    """Return True when the CAA identifier's brand appears in the
+    cert issuer text. Fuzzy on purpose — the mapping is unavoidably
+    imprecise (see comment on `_CA_ALIASES`)."""
+    ident = (identifier or "").strip().lower()
+    blob = (issuer_blob or "").lower()
+    if not ident or not blob:
+        return False
+    aliases = _CA_ALIASES.get(ident)
+    if aliases is None:
+        # Unknown CA — try the identifier's leading label as a stem.
+        # "example-ca.com" → "example-ca". Keeps the check functional
+        # for smaller/regional CAs not yet in the alias table.
+        stem = ident.split(".")[0]
+        return stem in blob if stem else False
+    return any(alias in blob for alias in aliases)
+
+
 def _records(rep: Report, d: str):
     S = "Core records"
     a = dnsmod.query(d, "A")
@@ -1750,6 +1804,85 @@ def _tls_posture(rep: Report, d: str):
                     "HSTS is present but its safety window is short. "
                     "Raise `max-age` to at least 15552000 (6 months); "
                     "31536000 (1 year) is the common production value.")
+
+    # --- CAA / cert issuer alignment (RFC 8659 §3) ---------------------
+    # A CA MUST NOT issue a cert unless a CAA `issue` (or `issuewild`)
+    # tag names it. Client-side we can't enforce that, but a mismatch
+    # between the served cert's issuer and the current CAA policy is a
+    # useful hardening signal: it flags stale infra, tightened policy
+    # after issuance, or (rarely) a real CA policy breach.
+    #
+    # Rule 1 boundaries:
+    #   - No CAA / only iodef  → not applicable, no finding
+    #   - TLS probe failed     → UNKNOWN
+    #   - CAA "issue ;" but a cert IS served → CRITICAL
+    caa_records_wire = (rep.data.get("records", {})
+                                .get("CAA", {})
+                                .get("records") or [])
+    caa_issue_values: list[str] = []
+    for line in caa_records_wire:
+        p = _parse_caa_record(line)
+        if not p:
+            continue
+        _flags, tag, value = p
+        if tag in ("issue", "issuewild"):
+            caa_issue_values.append(value.strip())
+
+    if caa_issue_values:
+        if not tls.get("ok"):
+            rep.add(S, "CAA / cert issuer alignment", "UNKNOWN",
+                    f"TLS probe failed: {tls.get('error')}",
+                    "Cert issuer could not be read; CAA alignment "
+                    "cannot be determined.",
+                    hardening=True)
+        else:
+            cert = tls.get("cert") or {}
+            issuer_blob = " ".join(filter(None, [
+                cert.get("issuer_cn"), cert.get("issuer_org")
+            ]))
+            # `issue ";"` is the RFC 8659 lockdown syntax: no CA may
+            # issue. A served cert in the face of this is escalation-
+            # worthy on its own — either the policy was violated at
+            # issuance, the cert predates the lockdown, or the zone
+            # file has a typo. All three are "someone should look".
+            lockdown = (
+                all(v == ";" for v in caa_issue_values)
+                and caa_issue_values
+            )
+            if lockdown:
+                rep.add(S, "CAA / cert issuer alignment", "FAIL",
+                        f"CAA `issue \";\"` forbids all issuance, "
+                        f"but cert served by {issuer_blob or 'unknown'}",
+                        "CAA policy at this label forbids any CA from "
+                        "issuing (RFC 8659 §5.2). A cert is nonetheless "
+                        "being served. Either the CAA is a typo, the "
+                        "cert predates the lockdown, or a CA violated "
+                        "policy at issuance. Verify the CAA record and "
+                        "audit cert issuance history.",
+                        severity="CRITICAL", hardening=True)
+            else:
+                named = [v for v in caa_issue_values if v != ";"]
+                matched = any(_caa_identifier_matches_issuer(v, issuer_blob)
+                              for v in named)
+                if matched:
+                    rep.add(S, "CAA / cert issuer alignment", "PASS",
+                            f"cert issuer '{issuer_blob}' matches CAA "
+                            f"policy ({', '.join(named)})",
+                            "", hardening=True, confidence="high")
+                else:
+                    rep.add(S, "CAA / cert issuer alignment", "WARN",
+                            f"cert issuer '{issuer_blob}' not named in "
+                            f"CAA policy ({', '.join(named)})",
+                            "The served certificate's issuer does not "
+                            "appear in the CAA policy. Common causes: "
+                            "the cert predates a tightened CAA record, "
+                            "an old load balancer / cached edge cert "
+                            "still holds a legacy cert, or (rarely) a "
+                            "CA issued in violation of policy. Note: "
+                            "CAA-identifier to issuer-text mapping is "
+                            "fuzzy — verify manually before treating "
+                            "this as a breach.",
+                            hardening=True, confidence="low")
 
 
 def grade(rep: Report, strict: bool = False) -> dict:
