@@ -42,10 +42,24 @@ class Finding:
     # Emit-site is authoritative — the classification lives with the check
     # that knows the answer, not in a global label set in grade().
     hardening: bool = False
+    # T2 severity tier: "" (default, ordinary) or "CRITICAL". A CRITICAL
+    # FAIL/WARN floors its section grade to F and the overall grade to F —
+    # a full-zone AXFR leak or a registry-hold state cannot be diluted by
+    # surrounding PASSes on other checks. CRITICAL PASS is legal but has
+    # no floor effect (you passed the critical check). CRITICAL UNKNOWN
+    # does NOT floor (rule 1: unretrievable stays unretrievable).
+    # Orthogonal to `hardening`: a CRITICAL marker overrides the
+    # hardening classification for grading purposes to prevent a
+    # "hardening hides critical" false negative.
+    severity: str = ""
 
     @property
     def is_scored(self) -> bool:
         return self.status in {"PASS", "WARN", "FAIL"}
+
+    @property
+    def is_critical(self) -> bool:
+        return self.severity == "CRITICAL"
 
 
 @dataclass
@@ -58,8 +72,10 @@ class Report:
     data: dict[str, Any] = field(default_factory=dict)
     degraded: list[str] = field(default_factory=list)  # modules that failed
 
-    def add(self, section, label, status, detail="", why="", hardening=False):
-        self.findings.append(Finding(section, label, status, detail, why, hardening))
+    def add(self, section, label, status, detail="", why="",
+            hardening=False, severity=""):
+        self.findings.append(Finding(section, label, status, detail, why,
+                                     hardening, severity))
 
     def section(self, name: str) -> list[Finding]:
         return [f for f in self.findings if f.section == name]

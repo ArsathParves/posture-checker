@@ -1547,6 +1547,15 @@ def grade(rep: Report, strict: bool = False) -> dict:
     def _is_failing(f):
         return f.status == "FAIL" or (strict and f.status == "WARN")
 
+    # T2: a CRITICAL FAIL/WARN in `findings` floors its section (and,
+    # downstream, overall) to F. UNKNOWN never scores so a CRITICAL
+    # UNKNOWN does not floor — rule 1 says unretrievable stays
+    # unretrievable, and a network hiccup on the AXFR probe must not
+    # collapse every zone to F.
+    def _has_critical(findings):
+        return any(f.is_critical and f.is_scored and f.status != "PASS"
+                   for f in findings)
+
     out = {}
     for sec in SECTIONS:
         scored = [f for f in rep.section(sec) if f.is_scored]
@@ -1557,6 +1566,8 @@ def grade(rep: Report, strict: bool = False) -> dict:
         pct = pts / (2 * len(scored))
         has_fail = any(_is_failing(f) for f in scored)
         band = _band(pct, has_fail)
+        if _has_critical(scored):
+            band = "F"
         out[sec] = (band, pct)
 
     bands = [b for b, _ in out.values() if b != "—"]
@@ -1586,8 +1597,15 @@ def grade(rep: Report, strict: bool = False) -> dict:
         # signals good posture across both dimensions.
         return f.hardening and f.status in ("WARN", "FAIL")
 
+    # T2: a CRITICAL finding lives in the correctness bucket regardless
+    # of its `hardening` flag. This closes the "hardening=True hides
+    # critical FAIL from correctness" false-negative class — a caller
+    # cannot inadvertently soften a CRITICAL by also marking it
+    # hardening. The `severity="CRITICAL"` marker is the stronger
+    # signal and wins.
     correctness_findings = [f for f in rep.findings
-                            if f.is_scored and not _is_hardening_absence(f)]
+                            if f.is_scored and
+                            (f.is_critical or not _is_hardening_absence(f))]
 
     def _grade_set(findings):
         if not findings:
@@ -1595,7 +1613,10 @@ def grade(rep: Report, strict: bool = False) -> dict:
         pts = sum(_score(f) for f in findings)
         pct = pts / (2 * len(findings))
         has_fail = any(_is_failing(f) for f in findings)
-        return _band(pct, has_fail)
+        band = _band(pct, has_fail)
+        if _has_critical(findings):
+            band = "F"
+        return band
 
     correctness_grade = _grade_set(correctness_findings)
     hardening_scored = [f for f in rep.findings if f.hardening and f.is_scored]
@@ -1614,6 +1635,12 @@ def grade(rep: Report, strict: bool = False) -> dict:
         c_idx = order.index(correctness_grade)
         h_idx = order.index(hardening_grade) if hardening_grade != "—" else c_idx
         overall_idx = round(c_idx * 0.8 + h_idx * 0.2)
+
+    # T2: a CRITICAL FAIL/WARN anywhere in the report floors overall to F.
+    # This is the last step so it wins over both the worst-weighted and
+    # the correctness/hardening-blend paths above.
+    if _has_critical(rep.findings):
+        overall_idx = order.index("F")
 
     ungraded = [sec for sec, (b, _) in out.items() if b == "—" and rep.section(sec)]
     unknowns = [f.section for f in rep.findings if f.status == "UNKNOWN"]

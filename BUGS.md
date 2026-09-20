@@ -26,12 +26,26 @@ an untested fix cycle regresses faster than it progresses.
   **Acceptance:** every finding has a stable ID; tests assert on IDs, not
   display strings; changing display text cannot break grading.
 
-- [ ] **T2. Severity tiers.**
-  Currently flat PASS/WARN/FAIL. An open AXFR (full zone leak) is weighted
-  identically to a missing AAAA record. Add `CRITICAL` that floors the
-  section grade regardless of surrounding PASS findings.
-  **Acceptance:** a domain with one CRITICAL finding and 8 PASS findings
-  grades F for that section, not B.
+- [x] **T2. Severity tiers.** ✅ DONE (mechanism)
+  `Finding.severity: str = ""` field added; `Report.add(..., severity=...)`
+  accepts `"CRITICAL"`. `checks.grade()` applies the CRITICAL floor at
+  three points:
+  - Per-section band: any scored CRITICAL FAIL/WARN in a section →
+    section band = F.
+  - Correctness bucket: CRITICAL findings live in correctness
+    regardless of `hardening=True` (closes the "hardening hides
+    critical" false-negative class).
+  - Overall grade: any CRITICAL FAIL/WARN → overall = F.
+  Rule 1 preserved: CRITICAL UNKNOWN does NOT floor (unretrievable
+  stays unretrievable — a network hiccup on the AXFR probe must not
+  collapse every zone to F). CRITICAL PASS is legal and has no floor
+  effect. Pinned by `tests/test_severity_critical_tier.py` (10 cases:
+  dataclass default, rep.add kwarg, PASS legal, FAIL floor, WARN
+  floor, PASS-no-floor, UNKNOWN-no-floor, overall floor, non-CRITICAL
+  regression backstop, hardening+CRITICAL overrides hardening).
+  Migration of specific existing findings to CRITICAL (open AXFR,
+  registry hold, open resolver, etc.) is follow-up commits — the
+  mechanism must land first so callers have somewhere to route to.
 
 - [x] **T3. Mockable DNS/RDAP transport layer.** ✅ DONE
   Every test in the suite patches DNS/RDAP/HTTP entry points via
@@ -547,7 +561,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | ID | Status | Pinning tests / notes |
 |---|---|---|
 | T1 | OPEN | Typed finding schema not shipped. `Report.add` still takes label strings; grading keys off label content via `hardening=` attribute (G2). A `finding_id` migration is a future refactor. |
-| T2 | OPEN | Severity is still flat PASS/WARN/FAIL. `--strict` (G4) promotes WARN→FAIL for scoring but does not introduce a CRITICAL tier. See `tests/test_grade_strict_mode.py` for the strict-mode semantics. |
+| T2 | DONE (mechanism) | `Finding.severity` field + `Report.add(severity="CRITICAL")` + three-point floor in `checks.grade()` (section, correctness, overall). Rule 1 preserved: CRITICAL UNKNOWN does not floor. Pinned by `tests/test_severity_critical_tier.py` (10 cases). Migration of specific findings to CRITICAL is follow-up commits. |
 | T3 | DONE | Offline test harness in place — nearly every test patches DNS/RDAP/HTTP entry points. `pytest -m "not network"` passes with zero outbound traffic. Enforced by CI (`.github/workflows/tests.yml`, pinned by `tests/test_ci_workflow.py`). |
 | T4 | PARTIAL | `tests/test_grading_ground_truth.py` pins grade outcomes for cloudflare.com / dnssec-failed.org / vergecloud.com; `tests/test_grading_google_unsigned.py` pins google.com. No full "golden file" per-finding output pin yet — deferred. |
 | T5 | OPEN | Per-finding confidence field not shipped. UI does not surface confidence. |
@@ -610,9 +624,10 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B36 | PARTIAL | CLAUDE.md rule 7 (vendor neutrality) is doctrine; remediation copy has been re-worded in-place but a data-model-level "general fix first, vendor secondary" restructure is still open. |
 | B37 | PARTIAL | Consensus reads via `parent_delegation` (D2), authoritative cross-check for A/AAAA (D5), per-run environment self-test (rule 5). Cross-resolver consensus for TXT/DNSKEY and confidence intervals remain unbuilt. |
 
-**Summary:** of 43 items, 27 are pinned DONE (including B28 negative-answer
-correctness, T6 structured logging, and B31 multi-vantage ECS geo-steering
-detection), 6 PARTIAL (subset shipped), 2 WITHDRAWN, and 8 OPEN. See
-`AUDIT.md` for the newer, prioritised remediation ledger — the two files
-intentionally overlap because BUGS.md is the raw work-queue history and
-AUDIT.md is the current sweep.
+**Summary:** of 43 items, 28 are pinned DONE (including B28 negative-answer
+correctness, T6 structured logging, B31 multi-vantage ECS geo-steering
+detection, and T2 CRITICAL severity-tier mechanism), 6 PARTIAL (subset
+shipped), 2 WITHDRAWN, and 7 OPEN. See `AUDIT.md` for the newer,
+prioritised remediation ledger — the two files intentionally overlap
+because BUGS.md is the raw work-queue history and AUDIT.md is the current
+sweep.
