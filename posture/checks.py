@@ -201,7 +201,7 @@ def run_streaming(domain_input: str, dkim_selectors=None, skip_asn=False):
 def _f2d(f):
     return {"section": f.section, "label": f.label, "status": f.status,
             "detail": f.detail, "why": f.why,
-            "confidence": f.confidence}
+            "confidence": f.confidence, "finding_id": f.finding_id}
 
 
 def _report_to_dict(rep):

@@ -47,8 +47,12 @@ EXPECTED_REPORT_KEYS = {
 # wire — they are grading-internal signals, not display fields.
 # Adding them here would leak grading model into the SPA and force
 # a coupled UI change.
+# T1: `finding_id` is a display-independent handle for external
+# consumers. Empty string for unmigrated emit sites (backwards-
+# compatible during the migration window).
 EXPECTED_FINDING_KEYS = {
     "section", "label", "status", "detail", "why", "confidence",
+    "finding_id",
 }
 
 
@@ -78,6 +82,10 @@ def _synthetic_report() -> Report:
     rep.add("DNSSEC", "Chain validates", "PASS",
             "DS→DNSKEY→root chain OK", hardening=True,
             confidence="high")
+    # One migrated emit site to exercise the T1 wire-format field.
+    rep.add("DNSSEC", "Chain broken", "FAIL",
+            "DS present but DNSKEY absent",
+            finding_id="DNSSEC_CHAIN_BROKEN")
     rep.add("Email authentication", "MTA-STS policy", "WARN",
             "policy fetch timed out; TXT present",
             confidence="low")
@@ -152,61 +160,78 @@ def test_report_dict_matches_golden():
              "status": "PASS",
              "detail": "found via IANA bootstrap",
              "why": "",
-             "confidence": ""},
+             "confidence": "",
+             "finding_id": ""},
             {"section": "Nameserver posture",
              "label": "Delegation",
              "status": "PASS",
              "detail": "4 NS match parent",
              "why": "",
-             "confidence": "high"},
+             "confidence": "high",
+             "finding_id": ""},
             {"section": "Nameserver posture",
              "label": "Cross-resolver consensus",
              "status": "PASS",
              "detail": "3/3 resolvers agree",
              "why": "",
-             "confidence": "medium"},
+             "confidence": "medium",
+             "finding_id": ""},
             {"section": "SOA & health",
              "label": "SOA readable",
              "status": "PASS",
              "detail": "serial=2024010101",
              "why": "",
-             "confidence": ""},
+             "confidence": "",
+             "finding_id": ""},
             {"section": "Core records",
              "label": "IPv6 (AAAA)",
              "status": "WARN",
              "detail": "no AAAA present",
              "why": "",
-             "confidence": ""},
+             "confidence": "",
+             "finding_id": ""},
             {"section": "DNSSEC",
              "label": "Chain validates",
              "status": "PASS",
              "detail": "DS→DNSKEY→root chain OK",
              "why": "",
-             "confidence": "high"},
+             "confidence": "high",
+             "finding_id": ""},
+            {"section": "DNSSEC",
+             "label": "Chain broken",
+             "status": "FAIL",
+             "detail": "DS present but DNSKEY absent",
+             "why": "",
+             "confidence": "",
+             "finding_id": "DNSSEC_CHAIN_BROKEN"},
             {"section": "Email authentication",
              "label": "MTA-STS policy",
              "status": "WARN",
              "detail": "policy fetch timed out; TXT present",
              "why": "",
-             "confidence": "low"},
+             "confidence": "low",
+             "finding_id": ""},
             {"section": "Security posture",
              "label": "Full-zone AXFR",
              "status": "FAIL",
              "detail": "master leaked entire zone",
              "why": "",
-             "confidence": ""},
+             "confidence": "",
+             "finding_id": ""},
             {"section": "Security posture",
              "label": "Environment gate",
              "status": "INFO",
              "detail": "wire path trusted",
              "why": "",
-             "confidence": ""},
+             "confidence": "",
+             "finding_id": ""},
             {"section": "Security posture",
              "label": "Cert expiry",
              "status": "UNKNOWN",
              "detail": "TLS handshake failed",
              "why": "",
-             "confidence": ""},
+             "confidence": "",
+             "finding_id": ""},
         ],
     }
     assert got == golden, (
@@ -241,7 +266,8 @@ def test_all_wire_fields_are_strings_except_lists_and_scalars():
     rep = _synthetic_report()
     d = c._report_to_dict(rep)
     for f in d["findings"]:
-        for key in ("section", "label", "status", "detail", "why", "confidence"):
+        for key in ("section", "label", "status", "detail", "why",
+                    "confidence", "finding_id"):
             assert isinstance(f[key], str), (
                 f"finding[{f.get('label')!r}][{key!r}] = "
                 f"{f[key]!r} (type={type(f[key]).__name__}) — "

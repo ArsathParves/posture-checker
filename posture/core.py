@@ -64,6 +64,15 @@ class Finding:
     # Migration of specific emit sites to declare `confidence=` is
     # follow-up work (same shape as T2's mechanism-first pattern).
     confidence: str = ""
+    # T1 stable identifier: display-independent handle for external
+    # consumers (JSON --output, SPA remediation lookups, cross-run
+    # diffs). Grading MUST NOT read this field — if it did, external
+    # callers could steer grades by injecting IDs, and rewording a
+    # display label would break grading (the exact bug this field
+    # exists to prevent). Empty string is the pre-T1 default; migration
+    # of specific emit sites is follow-up work (mechanism-first, same
+    # shape as T2 severity and T5 confidence).
+    finding_id: str = ""
 
     @property
     def is_scored(self) -> bool:
@@ -122,9 +131,10 @@ class Report:
     degraded: list[str] = field(default_factory=list)  # modules that failed
 
     def add(self, section, label, status, detail="", why="",
-            hardening=False, severity="", confidence=""):
+            hardening=False, severity="", confidence="", finding_id=""):
         self.findings.append(Finding(section, label, status, detail, why,
-                                     hardening, severity, confidence))
+                                     hardening, severity, confidence,
+                                     finding_id))
 
     def section(self, name: str) -> list[Finding]:
         return [f for f in self.findings if f.section == name]
