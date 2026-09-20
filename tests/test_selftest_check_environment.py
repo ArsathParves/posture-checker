@@ -289,23 +289,25 @@ def test_return_shape_contains_all_expected_keys(monkeypatch):
     assert isinstance(env["safe_for_per_ns_checks"], bool)
 
 
-def test_resolver_lookup_failure_does_not_crash(monkeypatch):
-    """If `dns.resolver.resolve("ns1.google.com")` itself fails (no
-    working recursive resolver at all), the self-test must still
-    return a valid dict — not raise. The AA/UDP legs read as
-    unavailable but the shape stays intact."""
+def test_resolver_lookup_failure_does_not_affect_control_leg(monkeypatch):
+    """Post-B33: the control leg uses static root-server IPs and does
+    NOT call the recursive resolver, so a broken resolver must be
+    invisible to the self-test. This locks in the SPOF-removal fix —
+    the control leg no longer inherits the resolver's reliability."""
     def udp(q, ip, timeout=None):
         if ip in BLACKHOLE_PROBES:
             raise dns.exception.Timeout()
-        raise AssertionError("control query should not fire when resolver fails")
+        # Any non-blackhole probe hits a root IP directly.
+        return _FakeMsg(aa=True)
 
     _install(monkeypatch, udp=udp,
              resolver_raises=dns.exception.DNSException("no resolver"))
     env = check_environment(timeout=0.01)
 
-    assert env["udp53_direct"] is False
-    assert env["tcp53_direct"] is False
-    assert env["safe_for_per_ns_checks"] is False
-    assert isinstance(env["notes"], list) and env["notes"], (
-        "resolver failure must produce at least one note"
-    )
+    # Resolver is broken but control leg still works.
+    assert env["udp53_direct"] is True
+    assert env["tcp53_direct"] is True
+    assert env["aa_flag_trustworthy"] is True
+    assert env["safe_for_per_ns_checks"] is True
+    # Shape stays intact — no crash, no missing keys.
+    assert isinstance(env["notes"], list)
