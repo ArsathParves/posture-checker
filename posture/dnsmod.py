@@ -1058,3 +1058,53 @@ def negative_answer_probe(domain: str) -> dict:
             "has_answer": bool(resp.answer),
         }
     return {"ok": False, "error": last_err}
+
+
+# B31 ECS vantages. Google 8.8.8.8 honours ECS; Cloudflare 1.1.1.1 strips
+# it, so a probe there would always report `diverges=False` and mask real
+# geo-steering. Route both probes through 8.8.8.8 for that reason.
+#
+# The two /24s are documentation-safe placeholders for "US eyeballs" vs
+# "India eyeballs": 73.0.0.0/24 sits inside a Verizon/Comcast US pool and
+# 103.21.244.0/24 inside APNIC's India allocation. Authoritative servers
+# that honour ECS use the /24 to pick the geo-closest edge — a divergent
+# answer set between the two indicates observable geo-steering.
+_ECS_VANTAGE_RESOLVER = "8.8.8.8"
+_ECS_VANTAGE_US = ("73.0.0.0", 24)
+_ECS_VANTAGE_IN = ("103.21.244.0", 24)
+
+
+def multi_vantage_a(domain: str) -> dict:
+    """B31: detect authoritative-server geo-steering by comparing A
+    answers under two ECS vantages (US /24 vs India /24). Returns
+    `{"ok": True, "us_records": [...], "in_records": [...], "diverges": bool}`
+    or `{"ok": False, "error": "..."}` on failure.
+
+    Rule 1: any probe failure returns `ok=False`. Downstream must
+    render UNKNOWN, never a confident PASS/INFO.
+    """
+    import dns.edns
+
+    def _probe(subnet: str, prefix: int) -> list[str]:
+        q = dns.message.make_query(domain, "A", use_edns=0, payload=4096)
+        opt = dns.edns.ECSOption(subnet, prefix)
+        q.use_edns(0, options=[opt], payload=4096)
+        resp = dns.query.udp(q, _ECS_VANTAGE_RESOLVER, timeout=TIMEOUT)
+        records: list[str] = []
+        for rrset in resp.answer:
+            if rrset.rdtype == dns.rdatatype.A:
+                for rr in rrset:
+                    records.append(rr.to_text())
+        return sorted(records)
+
+    try:
+        us_records = _probe(*_ECS_VANTAGE_US)
+        in_records = _probe(*_ECS_VANTAGE_IN)
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return {
+        "ok": True,
+        "us_records": us_records,
+        "in_records": in_records,
+        "diverges": us_records != in_records,
+    }

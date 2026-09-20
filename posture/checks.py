@@ -971,6 +971,36 @@ def _records(rep: Report, d: str):
                         "public resolvers return. Causes: propagation lag, "
                         "split-horizon DNS, or geo-targeted answers.")
 
+    # B31: multi-vantage geo-steering detection via EDNS Client Subnet.
+    # US /24 vs India /24 through a resolver that honours ECS. Rule 5:
+    # gated on the environment self-test — direct DNS must be trusted
+    # for the probe to run at all.
+    if rep.data.get("environment", {}).get("safe_for_direct_dns", False):
+        mv = dnsmod.multi_vantage_a(d)
+        rep.data["multi_vantage_a"] = mv
+        if not mv.get("ok"):
+            rep.add(S, "Multi-vantage A view", "UNKNOWN",
+                    f"could not probe: {mv.get('error', 'unknown')}",
+                    "Multi-vantage probe (ECS-tagged A queries to an "
+                    "ECS-honouring resolver) could not complete. Geo-"
+                    "steering behaviour cannot be characterised on this "
+                    "run.")
+        elif not mv.get("diverges"):
+            rep.add(S, "Multi-vantage A view", "PASS",
+                    "US and India ECS vantages return the same A set")
+        else:
+            us = ", ".join(mv["us_records"]) or "(empty)"
+            ind = ", ".join(mv["in_records"]) or "(empty)"
+            rep.add(S, "Multi-vantage A view", "INFO",
+                    f"US-ECS: {us}; India-ECS: {ind}",
+                    "The authoritative servers return different A "
+                    "records under a US /24 ECS tag versus an India "
+                    "/24 ECS tag — Indian visitors likely reach a "
+                    "different endpoint than US visitors. Often "
+                    "deliberate CDN behaviour; verify that your "
+                    "geo-steering matches your customer geography.",
+                    hardening=True)
+
 
 def _dnssec(rep: Report, d: str):
     S = "DNSSEC"

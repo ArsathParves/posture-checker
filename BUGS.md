@@ -424,11 +424,27 @@ an untested fix cycle regresses faster than it progresses.
 
 # P3 — Regional accuracy, self-test soundness, and bias
 
-- [ ] **B31. US-only resolvers for an India-first customer base.**
-  `1.1.1.1 / 8.8.8.8 / 9.9.9.9` are all US-operated. BFSI prospects' users
-  are in India. Geo-steered domains resolve to US-optimal answers, and the
-  authoritative-vs-cached check inherits the bias. Add an Indian resolver;
-  report multi-vantage divergence as a feature.
+- [x] **B31. US-only resolvers for an India-first customer base.** ✅ DONE
+  `dnsmod.multi_vantage_a(d)` sends two ECS-tagged A queries to
+  `8.8.8.8` (an ECS-honouring resolver — Cloudflare `1.1.1.1` strips
+  ECS, so probing there would always mask geo-steering): one with a
+  US /24 (`73.0.0.0/24`) and one with an India /24 (`103.21.244.0/24`,
+  inside APNIC's IN allocation). `_records` compares the answer sets
+  and emits `Multi-vantage A view`:
+  - Vantages agree → PASS.
+  - Vantages diverge → INFO + hardening=True (observation, not a
+    failure — deliberate CDN geo-steering is a legitimate design
+    choice; the finding tells the SE it's happening).
+  - Probe failed → UNKNOWN (rule 1).
+  - Env self-test flags direct DNS blocked → probe suppressed
+    entirely (rule 5).
+  Rule 7: the INFO detail does not recommend switching providers;
+  it asks the operator to verify geo-steering matches their
+  customer geography. Pinned by
+  `tests/test_multi_vantage_geo_steering.py` (9 cases: unit
+  agreement / divergence / failure / resolver-choice / distinct-ECS-
+  prefixes + integration PASS / INFO+hardening / UNKNOWN / rule-5
+  suppression).
 
 - [x] **B32. DKIM selector list is entirely Western ESPs.** ✅ DONE (via AUDIT FN2)
   `COMMON_SELECTORS` in `posture/emailauth.py` now includes India-region
@@ -586,7 +602,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 
 | ID | Status | Pinning tests / notes |
 |---|---|---|
-| B31 | OPEN | Public resolver pool remains US-first. Adding an Indian resolver + multi-vantage reporting is a targeted follow-up. |
+| B31 | DONE | `dnsmod.multi_vantage_a` sends US /24 vs India /24 ECS-tagged A queries through the ECS-honouring `8.8.8.8`; `_records` emits `Multi-vantage A view` PASS/INFO/UNKNOWN. Rule 5 gated on `safe_for_direct_dns`. Pinned by `tests/test_multi_vantage_geo_steering.py` (9 cases). |
 | B32 | DONE (via AUDIT FN2) | `tests/test_dkim_selector_coverage.py` pins the India-region additions (Netcore, Pepipost, Zeptomail, Kaleyra, Gupshup) plus the six FN2 ESP entries. |
 | B33 | PARTIAL (via AUDIT T4) | `tests/test_selftest_check_environment.py` pins the six-key return-shape contract and fault-injection semantics. Trigger-happy (single-probe interception) is intentional — see the "partial interception still flags intercepted" test. SPOF control resolver / UDP-fragmentation blind spots remain. |
 | B34 | DONE (via AUDIT D1) | `tests/test_query_cache.py` and `tests/test_query_cache_lru.py` pin TTL + LRU. |
@@ -594,8 +610,9 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B36 | PARTIAL | CLAUDE.md rule 7 (vendor neutrality) is doctrine; remediation copy has been re-worded in-place but a data-model-level "general fix first, vendor secondary" restructure is still open. |
 | B37 | PARTIAL | Consensus reads via `parent_delegation` (D2), authoritative cross-check for A/AAAA (D5), per-run environment self-test (rule 5). Cross-resolver consensus for TXT/DNSKEY and confidence intervals remain unbuilt. |
 
-**Summary:** of 43 items, 26 are pinned DONE (including B28 negative-answer
-correctness and T6 structured logging), 6 PARTIAL (subset shipped),
-2 WITHDRAWN, and 9 OPEN. See `AUDIT.md` for the newer, prioritised
-remediation ledger — the two files intentionally overlap because BUGS.md
-is the raw work-queue history and AUDIT.md is the current sweep.
+**Summary:** of 43 items, 27 are pinned DONE (including B28 negative-answer
+correctness, T6 structured logging, and B31 multi-vantage ECS geo-steering
+detection), 6 PARTIAL (subset shipped), 2 WITHDRAWN, and 8 OPEN. See
+`AUDIT.md` for the newer, prioritised remediation ledger — the two files
+intentionally overlap because BUGS.md is the raw work-queue history and
+AUDIT.md is the current sweep.
