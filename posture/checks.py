@@ -991,6 +991,46 @@ def _dnssec(rep: Report, d: str):
                         f"NSEC3 in use, iterations = {iters} "
                         "(RFC 9276 compliant).")
 
+    # B25: CDS/CDNSKEY (RFC 7344 / 8078). Only meaningful on signed
+    # zones — an unsigned zone has no DS to rotate, no rollover to
+    # automate. Rule 1: emitting a hardening finding on a non-applicable
+    # zone would be a false FAIL/WARN.
+    if state != "not_configured":
+        cds = dnsmod.cds_cdnskey_status(d)
+        rep.data["cds_cdnskey"] = cds
+        if not cds.get("ok"):
+            rep.add(S, "Automated DS rollover", "UNKNOWN",
+                    "Could not query CDS/CDNSKEY "
+                    f"({cds.get('error', 'unknown error')}).",
+                    "Retry from an unrestricted vantage point.")
+        else:
+            # RFC 7344 §4.1: parent may accept either record type;
+            # publishing one is enough to enable automated rollover.
+            if cds["has_cds"] or cds["has_cdnskey"]:
+                rep.add(S, "Automated DS rollover", "PASS",
+                        "CDS/CDNSKEY published — parent registrars "
+                        "supporting RFC 8078 can pick up DS updates "
+                        "without manual intervention.")
+            else:
+                rep.add(S, "Automated DS rollover", "WARN",
+                        "No CDS or CDNSKEY records published at the "
+                        "zone apex (RFC 7344) — DS rollovers require "
+                        "a manual EPP touch at the registrar.",
+                        "Publishing CDS/CDNSKEY (RFC 7344) lets an "
+                        "RFC 8078 parent automatically track DS "
+                        "updates. Absent them, a key rollover that "
+                        "misses the manual DS update at the parent "
+                        "will take the zone bogus.",
+                        hardening=True)
+            if cds["delete_signal"]:
+                rep.add(S, "CDS/CDNSKEY delete signal", "INFO",
+                        "Zone publishes an RFC 8078 §4 delete signal "
+                        "(CDS algorithm 0) — the parent is being "
+                        "asked to remove the DS.",
+                        "This is a coordinated unsign, not an error. "
+                        "If unexpected, investigate the signer "
+                        "configuration.")
+
 
 def _email(rep: Report, d: str, dkim_selectors):
     S = "Email authentication"

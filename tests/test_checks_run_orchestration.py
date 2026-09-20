@@ -163,6 +163,12 @@ def fake_dns(monkeypatch):
     monkeypatch.setattr(chk.dnsmod, "get_soa", _fake_get_soa)
     monkeypatch.setattr(chk.dnsmod, "query", _fake_query_absent)
     monkeypatch.setattr(chk.dnsmod, "dnssec_status", _fake_dnssec_not_configured)
+    monkeypatch.setattr(chk.dnsmod, "nsec_type",
+                        lambda d: {"ok": True, "type": "none"})
+    monkeypatch.setattr(chk.dnsmod, "cds_cdnskey_status",
+                        lambda d: {"ok": True, "has_cds": False,
+                                   "has_cdnskey": False,
+                                   "delete_signal": False})
     monkeypatch.setattr(chk.dnsmod, "axfr_open_check", _fake_axfr_closed)
     monkeypatch.setattr(chk.dnsmod, "open_resolver_check", _fake_open_resolver_none)
     monkeypatch.setattr(chk.dnsmod, "authoritative_vs_cached",

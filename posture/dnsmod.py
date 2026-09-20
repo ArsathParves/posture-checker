@@ -856,3 +856,52 @@ def nsec_type(domain: str) -> dict:
             return {"ok": True, "type": "NSEC"}
         return {"ok": True, "type": "none"}
     return {"ok": False, "error": last_err}
+
+
+def cds_cdnskey_status(domain: str) -> dict:
+    """Probe apex for CDS / CDNSKEY (B25 — RFC 7344 / 8078).
+
+    Signals whether the zone supports automated DS rollover via
+    parental agent polling. Also surfaces the RFC 8078 §4 "delete"
+    signal (algorithm 0 + digest 0 in CDS, algorithm 0 in CDNSKEY),
+    which tells the parent to remove the DS entirely.
+
+    Returns:
+      - {ok, has_cds, has_cdnskey, delete_signal} on success
+      - {ok=False, error} on unretrievable
+
+    Rule 1: if either sub-probe fails we still treat the whole check
+    as unretrievable — a partial answer would misreport "no
+    automated rollover" as adoption gap when in fact we couldn't see.
+    """
+    cds = query(domain, "CDS")
+    cdnskey = query(domain, "CDNSKEY")
+    if not cds.get("ok") or not cdnskey.get("ok"):
+        err = cds.get("error") or cdnskey.get("error") or "unknown"
+        return {"ok": False, "error": err}
+    cds_records = cds.get("records") or []
+    cdnskey_records = cdnskey.get("records") or []
+    has_cds = bool(cds_records)
+    has_cdnskey = bool(cdnskey_records)
+    # RFC 8078 §4 delete signal: CDS "0 0 0 00" and/or CDNSKEY with
+    # algorithm 0. Check the algorithm token in each record's display
+    # form (whitespace-separated fields, alg is the 2nd column for CDS
+    # and the 3rd for CDNSKEY).
+    delete_signal = False
+    for r in cds_records:
+        parts = r.split()
+        if len(parts) >= 2 and parts[1] == "0":
+            delete_signal = True
+            break
+    if not delete_signal:
+        for r in cdnskey_records:
+            parts = r.split()
+            if len(parts) >= 3 and parts[2] == "0":
+                delete_signal = True
+                break
+    return {
+        "ok": True,
+        "has_cds": has_cds,
+        "has_cdnskey": has_cdnskey,
+        "delete_signal": delete_signal,
+    }

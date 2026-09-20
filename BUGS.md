@@ -308,9 +308,16 @@ an untested fix cycle regresses faster than it progresses.
   deprecated); unsigned zone → no finding (rule 1); probe failed →
   UNKNOWN.
 
-- [ ] **B25. No CDS/CDNSKEY check (RFC 7344 / 8078).**
+- [x] **B25. No CDS/CDNSKEY check (RFC 7344 / 8078).** ✅ DONE.
   These signal automated DNSSEC key rollover / DS bootstrapping capability —
-  relevant to spotting zones at risk during manual rollovers.
+  relevant to spotting zones at risk during manual rollovers. Fixed via
+  `dnsmod.cds_cdnskey_status()` which probes both record types at the
+  zone apex and detects the RFC 8078 §4 delete signal (algorithm 0).
+  `checks._dnssec` emits: signed zone + CDS or CDNSKEY published → PASS
+  "Automated DS rollover"; signed zone without either → WARN
+  hardening=True (adoption gap, manual rollover only); delete signal →
+  additional INFO surfacing the pending unsign; unsigned zone → no
+  finding (rule 1); probe failed → UNKNOWN.
 
 - [ ] **B26. Authoritative nameservers' own TCP/53 support not tested.**
   DNS requires TCP (RFC 7766). A nameserver answering only UDP breaks large
@@ -483,7 +490,7 @@ premise was incorrect on inspection), **OPEN** (unaddressed, no test).
 | B22 | DONE | Apex A/AAAA bogon check added to `checks._records`. `_is_bogon_address` uses stdlib `ipaddress` classification (`is_private`, `is_loopback`, `is_link_local`, `is_multicast`, `is_reserved`, `is_unspecified`) plus an explicit RFC 6598 CGN (`100.64/10`) fallback for Python <3.13. Emits `A record bogon check` / `AAAA record bogon check` at FAIL when the finding is non-empty; skipped entirely when the record is absent (rule 1 preserved). Pinned by `tests/test_bogon_private_space.py` (10 cases: RFC 1918, loopback, doc-range, mixed public+private, IPv6 ULA / link-local / doc-range, plus non-regression cases for public IPv4/IPv6 and empty-records). |
 | B23 | DONE | `dnsmod._is_in_bailiwick` + `_query_parent_ns_view` extracts additional-section glue; `parent_delegation` aggregates. `checks._nameservers` emits `Glue records` PASS / FAIL / not-applicable per RFC 1034 §4.2.1. Pinned by `tests/test_glue_record_validation.py`. |
 | B24 | DONE | NSEC vs NSEC3 zone-walking exposure — no check. → `dnsmod.nsec_type()` probes authority section; `_dnssec` grades NSEC/NSEC3 iterations per RFC 9276. |
-| B25 | OPEN | CDS/CDNSKEY (RFC 7344/8078) — no check. |
+| B25 | DONE | CDS/CDNSKEY (RFC 7344/8078) — no check. → `dnsmod.cds_cdnskey_status()` probes apex; `_dnssec` grades automated-rollover adoption and surfaces the RFC 8078 delete signal. |
 | B26 | OPEN | Authoritative NS's own TCP/53 support — no check. |
 | B27 | OPEN | EDNS compliance / DNS cookies (RFC 7873) — no check. |
 | B28 | OPEN | Negative-answer correctness — no check. |
