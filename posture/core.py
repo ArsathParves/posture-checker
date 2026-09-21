@@ -386,7 +386,12 @@ def cymru_asn(ip: str) -> dict:
             rev = ".".join(reversed(ip.split("."))) + ".origin.asn.cymru.com"
             ans = r.resolve(rev, "TXT")
             parts = [p.strip() for p in str(ans[0]).strip('"').split("|")]
-            asn = parts[0].split()[0]
+            # Cymru's origin.asn TXT can carry multiple ASNs (multi-origin
+            # IPs). Take the first, coerce to int at THE BOUNDARY — every
+            # downstream table (LARGE_ANYCAST_ASNS) is keyed on int and
+            # would silently miss a string here.
+            asn_token = parts[0].split()[0]
+            asn = int(asn_token)
             try:
                 ans2 = r.resolve(f"AS{asn}.asn.cymru.com", "TXT")
                 owner = [p.strip() for p in str(ans2[0]).strip('"').split("|")][-1]
