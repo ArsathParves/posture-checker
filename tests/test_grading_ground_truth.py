@@ -72,7 +72,7 @@ def _cloudflare_shaped_report() -> Report:
 
         _pass("Nameserver posture", "Nameserver count"),
         _pass("Nameserver posture", "Nameserver reachability"),
-        _pass("Nameserver posture", "Network diversity"),  # 1 anycast operator
+        _pass("Nameserver posture", "Nameserver topology"),  # 1 anycast operator
         _pass("Nameserver posture", "IPv6 (AAAA) on nameservers", hardening=True),
 
         _pass("SOA & zone hygiene", "SOA present"),
@@ -160,7 +160,7 @@ def _dnssec_failed_shaped_report() -> Report:
 
         _pass("Nameserver posture", "Nameserver count"),
         _pass("Nameserver posture", "Nameserver reachability"),
-        _pass("Nameserver posture", "Network diversity"),
+        _pass("Nameserver posture", "Nameserver topology"),
 
         _pass("SOA & zone hygiene", "SOA present"),
         _pass("SOA & zone hygiene", "SOA MNAME reachable"),
@@ -229,7 +229,7 @@ def _vergecloud_shaped_report() -> Report:
     """vergecloud.com: 1 anycast operator (AS141383) with two NS ranges,
     signed zone, adopted hardening features. This fixture pins the
     grade-side of C4: the operator classifier fix flows through to a
-    PASS on "Network diversity" — this test asserts the grade
+    PASS on "Nameserver topology" — this test asserts the grade
     downstream is A, not the false single-point-of-failure D.
 
     The audit called this the tool's biggest correctness embarrassment
@@ -247,10 +247,10 @@ def _vergecloud_shaped_report() -> Report:
 
         _pass("Nameserver posture", "Nameserver count"),
         _pass("Nameserver posture", "Nameserver reachability"),
-        # The bug this whole file most cares about: "Network diversity"
+        # The bug this whole file most cares about: "Nameserver topology"
         # must be PASS despite 2 NS-IP ranges, because ASN classifies
         # AS141383 as one large anycast operator.
-        _pass("Nameserver posture", "Network diversity"),
+        _pass("Nameserver posture", "Nameserver topology"),
         _pass("Nameserver posture", "IPv6 (AAAA) on nameservers", hardening=True),
 
         _pass("SOA & zone hygiene", "SOA present"),

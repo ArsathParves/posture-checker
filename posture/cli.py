@@ -116,12 +116,15 @@ REMEDIATION: dict[str, Remediation] = {
         vendor="VergeCloud anycast removes single-node reachability "
                "failure.",
     ),
-    "Network diversity": Remediation(
-        general="Spread nameservers across distinct ASNs and physical "
-                "regions. All NS on one operator, one ASN, or one "
-                "city is a shared-fate single point of failure.",
-        vendor="VergeCloud ADNS runs across a distributed anycast "
-               "network.",
+    "Nameserver topology": Remediation(
+        general="If the delegation is a single operator that does NOT "
+                "run a multi-PoP anycast estate, spread nameservers "
+                "across distinct ASNs and regions. Verified anycast "
+                "(one operator, many PoPs) is a stronger topology "
+                "than multiple unicast providers in the same DC and "
+                "is not a shared-fate single point of failure.",
+        vendor="VergeCloud ADNS is a globally distributed anycast "
+               "network across independent PoPs.",
     ),
     "CAA record": Remediation(
         general="Publish a CAA record naming the CA(s) authorised to "

@@ -31,26 +31,103 @@ LARGE_ANYCAST_OPERATORS = {
 }
 
 
+def _tokenise_org(s: str) -> set[str]:
+    """Split an RIR org string into a normalised token set.
+
+    RIR org strings are inconsistent: ``"VERGE CLOUD PRIVATE LIMITED"``,
+    ``"VERGE-AS-AP - VERGE CLOUD PRIVATE LIMITED, IN"``, ``"AMAZON-02"``
+    all name the same class of operator. Splitting on non-alphanumeric
+    runs and lower-casing yields tokens that compare cleanly:
+    ``{"verge","cloud","private","limited"}`` versus the brand key set.
+    """
+    return {t for t in re.split(r"[^a-z0-9]+", s.lower()) if t}
+
+
+def _brand_tokenisations() -> list[set[str]]:
+    """Pre-tokenised brand keys for the fallback classifier.
+
+    A brand entry like ``"vergecloud"`` matches the RIR-space variant
+    ``"verge cloud"`` when we split BOTH sides the same way: ``vergecloud``
+    stays as a single token; ``verge cloud`` becomes ``{"verge","cloud"}``.
+    A raw single-token brand can never match a multi-token org, so we
+    also inject well-known token-split variants.
+
+    The variants live here (not in ``LARGE_ANYCAST_OPERATORS``) because
+    the brand set is the read-only public constant; this transformation
+    is internal to the classifier.
+    """
+    variants = {
+        "vergecloud": [{"verge", "cloud"}],
+        "digitalocean": [{"digital", "ocean"}],
+        "azure": [{"microsoft", "azure"}],
+        # "CLOUDFLARENET" is the AS-registry name for AS13335. Add as a
+        # compound token so single-token brand "cloudflare" still catches
+        # the real Cymru string.
+        "cloudflare": [{"cloudflarenet"}],
+    }
+    tokens = []
+    for k in LARGE_ANYCAST_OPERATORS:
+        tokens.append({k})
+        for v in variants.get(k, []):
+            tokens.append(v)
+    return tokens
+
+
 def _is_large_anycast_operator(asn: int | None, org_string: str | None) -> bool:
     """Classify an NS operator as running a large multi-PoP anycast estate.
 
     ASN is checked first (data-driven, verifiable). If ASN is not known,
-    fall back to a case-insensitive substring match against the legacy
-    brand-string set — this covers operators whose ASN has not yet been
-    pinned into ``LARGE_ANYCAST_ASNS`` but whose org name Team Cymru
-    returns in a recognisable form.
+    tokenise the org string and check for a superset of any known brand
+    token set — this handles ``"VERGE CLOUD PRIVATE LIMITED"`` matching
+    the ``"vergecloud"`` key correctly. Substring ``in`` matching was
+    the original approach and produced two known bugs: single-token
+    brands failed to match multi-token registry strings (the vergecloud
+    fallthrough), and multi-token brand tokens could accidentally match
+    substrings of unrelated words. Token-set containment fixes both.
 
     ROOT CAUSE PRINCIPLE (CLAUDE.md): ASN is the protocol source of truth
     for network identity; the brand-string set is the shortcut. Do not
-    invert this order. A brand-first classifier is what mis-graded
-    vergecloud.com as "1 operator = SPOF" before C4.
+    invert this order.
     """
     if asn is not None and asn in LARGE_ANYCAST_ASNS:
         return True
     if not org_string:
         return False
-    blob = org_string.lower()
-    return any(k in blob for k in LARGE_ANYCAST_OPERATORS)
+    org_tokens = _tokenise_org(org_string)
+    if not org_tokens:
+        return False
+    for brand_tokens in _brand_tokenisations():
+        if brand_tokens.issubset(org_tokens):
+            return True
+    return False
+
+
+def _anycast_confidence_tier(host_info: dict) -> str:
+    """T5 confidence tier for the "single operator is anycast" verdict.
+
+    Returned tiers:
+      - ``"high"``   at least one NS host's ASN is in ``LARGE_ANYCAST_ASNS``
+                     (protocol source of truth — the AS registry).
+      - ``"medium"`` no ASN match but at least one org string matches a
+                     brand in ``LARGE_ANYCAST_OPERATORS`` (heuristic —
+                     subject to Cymru's string variation across regions
+                     and rebrands).
+      - ``""``       no anycast signal at all.
+
+    Separating "ASN-verified" from "brand-matched" surfaces the same
+    high/medium/low tier reader confidence that T5 introduced elsewhere
+    — a low-confidence anycast claim reads differently to a downstream
+    SE than a high-confidence one, without changing the grade band.
+    """
+    for info in host_info.values():
+        asn = info.get("asn")
+        if asn is not None and asn in LARGE_ANYCAST_ASNS:
+            return "high"
+    for info in host_info.values():
+        org = info.get("org")
+        if org and any(k in org.lower() for k in LARGE_ANYCAST_OPERATORS):
+            return "medium"
+    return ""
 
 SECTIONS = [
     "Registration & delegation",
@@ -575,26 +652,57 @@ def _nameservers(rep: Report, d: str, skip_asn=False) -> dict:
                     "; ".join(f"{h} → {o}" for h, o in owners.items()),
                     "Identified from IP registry data — this is the network operator, "
                     "which may differ from the customer-facing DNS brand.")
-            # Anycast classification runs per-host on the (asn, org) tuple —
-            # if ANY host is on a known anycast ASN, the single-operator set
-            # is treated as an anycast estate, not a correlated-failure risk.
-            big_anycast = any(
-                _is_large_anycast_operator(info.get("asn"), info.get("org"))
-                for info in host_info.values()
-            )
+            # BIAS-2: Nameserver topology. Verified anycast is a
+            # deliberate architectural choice, not a correlated-failure
+            # concession — grade it PASS with a confidence tier that
+            # reflects whether we verified via the ASN registry (high)
+            # or fell back to a brand-string heuristic (medium).
+            #
+            # BIAS-4: a brand-string-only classification (medium) is
+            # upgraded to high when a wire-level CH TXT id.server probe
+            # confirms the operator runs professional authoritative
+            # infrastructure. Rule-5 gated — skipped under env-unsafe.
+            #
+            # finding_id="NS_TOPOLOGY" is the T1 handle: external
+            # consumers pin on the ID so the label rename (from the
+            # historic "Network diversity") does not break them.
+            anycast_tier = _anycast_confidence_tier(host_info)
+            if (anycast_tier == "medium"
+                    and rep.data["environment"]["safe_for_per_ns_checks"]):
+                # Try to upgrade via wire-level signal.
+                probed_ips = []
+                for host, ips in ns_map.items():
+                    ip = (ips["ipv4"] or [None])[0]
+                    if ip:
+                        probed_ips.append(ip)
+                for ip in probed_ips:
+                    probe = dnsmod.probe_ns_id_server(ip)
+                    if probe.get("ok"):
+                        anycast_tier = "high"
+                        break
             if len(distinct) > 1:
-                rep.add(S, "Network diversity", "PASS",
-                        f"{len(distinct)} distinct operator(s): " + "; ".join(sorted(distinct)))
-            elif big_anycast:
-                rep.add(S, "Network diversity", "INFO",
-                        f"Single operator ({'; '.join(sorted(distinct))}) — large anycast network",
-                        "Concentrated with one provider, but that provider runs a "
-                        "multi-PoP anycast estate; this is an architectural choice, "
-                        "not a per-node failure risk.")
+                rep.add(S, "Nameserver topology", "PASS",
+                        f"{len(distinct)} distinct operators: "
+                        + "; ".join(sorted(distinct)),
+                        "Multiple independent operators — correlated-failure "
+                        "risk is bounded to the intersection.",
+                        confidence="high", finding_id="NS_TOPOLOGY")
+            elif anycast_tier:
+                rep.add(S, "Nameserver topology", "PASS",
+                        f"Single operator ({'; '.join(sorted(distinct))}) "
+                        f"running a multi-PoP anycast estate",
+                        "Anycast concentrates operator identity while "
+                        "distributing infrastructure across many PoPs — the "
+                        "deliberate topology of every hyperscale DNS provider.",
+                        confidence=anycast_tier, finding_id="NS_TOPOLOGY")
             else:
-                rep.add(S, "Network diversity", "WARN",
-                        f"{len(distinct)} distinct operator(s): " + "; ".join(sorted(distinct)),
-                        "All nameservers sit on one operator's network — correlated failure risk.")
+                rep.add(S, "Nameserver topology", "WARN",
+                        f"Single operator: {'; '.join(sorted(distinct))} "
+                        f"(topology not verified as anycast)",
+                        "All nameservers sit on one operator's network. "
+                        "If the operator does not run an anycast estate, "
+                        "this is a correlated-failure risk.",
+                        confidence="low", finding_id="NS_TOPOLOGY")
     return ns_map
 
 

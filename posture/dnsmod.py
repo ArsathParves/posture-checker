@@ -24,6 +24,7 @@ import dns.message
 import dns.name
 import dns.query
 import dns.rcode
+import dns.rdataclass
 import dns.rdatatype
 import dns.resolver
 
@@ -1108,6 +1109,53 @@ def multi_vantage_a(domain: str) -> dict:
         "in_records": in_records,
         "diverges": us_records != in_records,
     }
+
+
+# BIAS-4: wire-level anycast signal — CH-class TXT id.server probe.
+#
+# RFC 4892 / BCP 178 defines ``id.server`` as the standard identifier
+# an authoritative nameserver may serve over a CH-class TXT query.
+# BIND, NSD, PowerDNS, Knot, and every professionally-run anycast DNS
+# platform expose this (some by default, some behind a config knob).
+# The response is typically a PoP identifier like ``"fra01.<operator>"``
+# or ``"iad.<operator>"``.
+#
+# The probe is not a proof of anycast on its own (a unicast BIND can
+# also serve id.server), but it IS strong evidence that the operator
+# runs professional authoritative infrastructure. Combined with the
+# brand-string / ASN classification, a successful id.server probe
+# upgrades confidence in the "single operator is anycast" verdict
+# from ``medium`` (brand-string only) to ``high`` (brand-string +
+# wire-level infrastructure signal).
+#
+# Rule-5 boundary: the caller MUST NOT invoke this on a network path
+# marked unsafe by ``check_environment``. The probe hits the NS IP
+# directly on UDP/53 and has the same trust requirements as per-NS
+# SOA probing.
+def probe_ns_id_server(ns_ip: str) -> dict:
+    """Query ``id.server`` CH TXT at ``ns_ip`` (UDP/53).
+
+    Returns ``{"ok": True, "identifier": "<value>"}`` on a well-formed
+    non-empty response, or ``{"ok": False}`` on any failure (REFUSED,
+    NXDOMAIN, timeout, empty TXT, or malformed response). Rule 1:
+    unretrievable is never collapsed into ``"not anycast"``.
+    """
+    try:
+        q = dns.message.make_query("id.server", dns.rdatatype.TXT,
+                                    rdclass=dns.rdataclass.CH)
+        resp = dns.query.udp(q, ns_ip, timeout=TIMEOUT)
+    except Exception:
+        return {"ok": False}
+
+    if resp.rcode() != dns.rcode.NOERROR:
+        return {"ok": False}
+
+    for rrset in resp.answer:
+        for rr in rrset:
+            text = rr.to_text().strip().strip('"')
+            if text:
+                return {"ok": True, "identifier": text}
+    return {"ok": False}
 
 
 # B37: cross-resolver DNSKEY consensus.

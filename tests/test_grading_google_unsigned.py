@@ -61,7 +61,7 @@ def _google_shaped_report() -> Report:
                 "4 nameservers"),
         Finding("Nameserver posture", "Nameserver reachability", "PASS",
                 "4/4 nameservers responded"),
-        Finding("Nameserver posture", "Network diversity", "PASS",
+        Finding("Nameserver posture", "Nameserver topology", "PASS",
                 "1 operator (Google, AS15169) — large anycast estate"),
         # Hardening-eligible: PASS here because google.com's nameservers
         # ARE dual-stack. hardening=True mirrors the emit site (checks._nameservers).
