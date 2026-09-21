@@ -1239,8 +1239,8 @@ def _dnssec(rep: Report, d: str):
                     f"Deprecated algorithm(s) in use: {', '.join(deprecated)}",
                     "RFC 8624 §3.1 marks SHA-1-based DNSSEC signing algorithms "
                     "as NOT RECOMMENDED (algs 5, 7) or MUST NOT (algs 1, 3, 6). "
-                    "Rotate the key material to alg 13 (ECDSAP256SHA256) or "
-                    "alg 15 (ED25519) at your DNS provider.",
+                    "The signer should rotate the key material to alg 13 "
+                    "(ECDSAP256SHA256) or alg 15 (ED25519).",
                     hardening=True)
     for n in st["notes"]:
         rep.add(S, "Note", "INFO", n)
@@ -1302,8 +1302,8 @@ def _dnssec(rep: Report, d: str):
                     "NSEC (RFC 4034 §4) returns the next existing name in "
                     "the zone with each negative answer, forming a linked "
                     "list an attacker can traverse to discover every "
-                    "hostname. Switch to NSEC3 (RFC 5155) at your DNS "
-                    "provider to hash owner names.",
+                    "hostname. The signer should switch to NSEC3 (RFC "
+                    "5155) to hash owner names.",
                     hardening=False)
         elif nsec["type"] == "NSEC3":
             iters = nsec.get("iterations", 0)
