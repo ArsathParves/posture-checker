@@ -1456,9 +1456,24 @@ def _email(rep: Report, d: str, dkim_selectors):
                 x["selector"] for x in dkim["revoked"])
         rep.add(S, "DKIM", "PASS", detail)
     else:
+        # BIAS-7: the "no selectors found" case MUST NOT collapse into
+        # "no DKIM configured". Surface the exact probed-selector list
+        # (truncated for readability) plus a pointer to --dkim-selector
+        # so a reader can either verify their custom selector was
+        # tried or supply it on the next run. Rule 1: unretrievable /
+        # not-discoverable stays UNKNOWN, never becomes FAIL.
+        probed = dkim.get("probed_selectors") or []
+        head = ", ".join(probed[:8])
+        tail_note = "" if len(probed) <= 8 else f" (…and {len(probed) - 8} more)"
         rep.add(S, "DKIM", "UNKNOWN",
-                f"Not found under {dkim['probed']} common selectors",
-                "DKIM selectors are not discoverable via DNS — this does NOT prove DKIM is absent.")
+                f"Not found under {dkim['probed']} common selectors "
+                f"[{head}{tail_note}]",
+                "DKIM selectors are not discoverable via DNS — this "
+                "does NOT prove DKIM is absent. The tool probes a "
+                "fixed list of common ESP selectors; a custom or "
+                "provider-specific selector will not appear here. "
+                "Re-run with `--dkim-selector <name>` to add an ESP-"
+                "specific selector to the probe list.")
 
     dmarc = emailauth.evaluate_dmarc(d)
     rep.data["dmarc"] = dmarc

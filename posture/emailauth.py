@@ -266,6 +266,13 @@ def evaluate_dkim(domain: str, extra_selectors=None) -> dict:
         "selectors": valid,
         "revoked": revoked,
         "probed": len(selectors),
+        # BIAS-7: preserve the exact selector list probed so the caller
+        # can surface it in the UNKNOWN disclaimer. Without this, "not
+        # found under N common selectors" is opaque — a reader with a
+        # custom ESP selector can't tell whether their selector was
+        # tried. Rule-1 boundary: the tool cannot enumerate all DKIM
+        # keys via DNS, and the emit must make that limitation explicit.
+        "probed_selectors": list(selectors),
         "wildcard": False,
         # critical: never report absence as fact
         "label": ("Found" if valid else "Not found under common selectors"),
