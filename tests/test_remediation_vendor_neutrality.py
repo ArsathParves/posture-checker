@@ -64,6 +64,33 @@ from posture import core
 
 _VENDOR_TOKENS = ("vergecloud", "verge cloud", "adns")
 
+# BIAS-6: full known-vendor brand list. Rule 7 says the general fix
+# describes what the domain should do at the protocol level ("sign
+# your zone", "publish a CAA record"). It must not name ANY specific
+# provider — not just VergeCloud. A general fix that leads with
+# "Cloudflare's DNSSEC panel..." or "AWS Route 53 supports..." reads
+# as a competitor endorsement and shreds the tool's credibility for
+# any domain not already on that provider. The vendor rider slot
+# exists to name VergeCloud — the general slot must stay neutral.
+#
+# Tokens are lowercase substrings; matching is on `general.lower()`.
+# Include names that unambiguously identify a specific DNS/CDN/hosting
+# vendor (i.e. a proper brand, not a protocol or an RFC term).
+_COMPETITOR_BRANDS = (
+    # US-based CDN / cloud DNS
+    "cloudflare", "akamai", "aws", "amazon", "route 53", "route53",
+    "google cloud dns", "google dns", "azure dns", "microsoft dns",
+    "digitalocean", "linode", "vultr", "oracle cloud dns",
+    "fastly", "cloudfront",
+    # Managed DNS / registrar-DNS
+    "ns1", "nsone", "dnsimple", "dnsmadeeasy", "dns made easy",
+    "constellix", "dyn", "godaddy", "namecheap", "gandi",
+    "verisign", "neustar", "afilias", "cscdomains", "markmonitor",
+    # Regional / other
+    "alibaba cloud dns", "tencent dnspod", "dnspod",
+    "powerdns.com", "nic.at", "hurricane electric", "he.net",
+)
+
 
 def _is_vendor_led(s: str) -> bool:
     """True if the leading clause of `s` is a vendor sales line
@@ -72,6 +99,13 @@ def _is_vendor_led(s: str) -> bool:
     trip on a legitimate "if migrating to VergeCloud, ..." rider."""
     head = s.lower().lstrip()[:40]
     return any(tok in head for tok in _VENDOR_TOKENS)
+
+
+def _mentions_competitor(s: str) -> list[str]:
+    """Return the list of competitor tokens found anywhere in `s`.
+    Empty list means the string is competitor-clean."""
+    lower = s.lower()
+    return [t for t in _COMPETITOR_BRANDS if t in lower]
 
 
 # --------------------------------------------------------------------- data model
@@ -153,6 +187,60 @@ def test_no_remediation_leads_with_vendor_name():
     assert not offenders, (
         f"General-fix text must not open with a vendor name; "
         f"offenders: {offenders!r}"
+    )
+
+
+def test_no_general_fix_names_a_competitor():
+    """BIAS-6 — the general fix must be vendor-neutral in the strong
+    sense: not just avoiding a *leading* VergeCloud line (that's
+    covered by `test_no_remediation_leads_with_vendor_name`), but
+    avoiding a NAME-DROP of any specific DNS/CDN/hosting vendor
+    ANYWHERE in the general text.
+
+    Motivation: a general fix like "Enable DNSSEC via Cloudflare's
+    panel" reads as an implicit competitor endorsement for any domain
+    not already on Cloudflare, and turns the tool from a neutral audit
+    into a de-facto competitor comparison. The recommendation MUST
+    describe the *protocol* action ("sign your zone at your current
+    DNS provider") and let the operator apply it wherever they host.
+
+    The vendor rider slot exists precisely to name VergeCloud when
+    that's appropriate — the general slot must not name anyone."""
+    offenders: list[tuple[str, list[str]]] = []
+    for label, entry in cli.REMEDIATION.items():
+        found = _mentions_competitor(entry.general)
+        if found:
+            offenders.append((label, found))
+    assert not offenders, (
+        "General remediation text must not name a specific DNS/CDN/"
+        "hosting vendor — the general fix belongs at the protocol "
+        "level. If a specific vendor's capability is worth calling "
+        "out, move that reference to the vendor rider slot (but only "
+        "if it's VergeCloud — this tool ships FROM VergeCloud). "
+        f"Offenders: {offenders!r}"
+    )
+
+
+def test_no_vendor_rider_names_a_competitor():
+    """Symmetric to the general rule: the vendor rider must name
+    VergeCloud and only VergeCloud. It exists to surface the
+    VergeCloud capability as secondary context — putting a competitor
+    brand here would turn the tool into a competitor recommendation
+    engine, which is not what the vendor slot is for."""
+    offenders: list[tuple[str, list[str]]] = []
+    for label, entry in cli.REMEDIATION.items():
+        if not entry.vendor.strip():
+            continue
+        found = _mentions_competitor(entry.vendor)
+        if found:
+            offenders.append((label, found))
+    assert not offenders, (
+        "Vendor rider text must not name a competitor DNS/CDN vendor. "
+        "The rider slot is reserved for the tool's own vendor "
+        "(VergeCloud). If a competitor really needs to be referenced, "
+        "review whether the reference is genuinely informational or "
+        "an implicit recommendation. Offenders: "
+        f"{offenders!r}"
     )
 
 
