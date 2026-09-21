@@ -63,12 +63,20 @@ async def test_slow_stream_gets_timeout_event_and_closes(monkeypatch):
     try:
         gen = _drive_stream(job.check_id)
         chunks = []
+
+        async def _consume():
+            async for chunk in gen:
+                chunks.append(chunk)
+
         # Give the generator up to 3x the ceiling — if it hasn't
         # terminated by then, the fix is not implemented.
+        # `asyncio.wait_for` (3.10-compatible) — `asyncio.timeout`
+        # context manager only exists on 3.11+.
         try:
-            async with asyncio.timeout(server.SSE_MAX_STREAM_SECONDS * 3 + 1):
-                async for chunk in gen:
-                    chunks.append(chunk)
+            await asyncio.wait_for(
+                _consume(),
+                timeout=server.SSE_MAX_STREAM_SECONDS * 3 + 1,
+            )
         except asyncio.TimeoutError:
             pytest.fail(
                 f"SSE stream did not terminate within "
@@ -98,9 +106,12 @@ async def test_timed_out_stream_leaves_job_intact(monkeypatch):
     server.JOBS[job.check_id] = job
     try:
         gen = _drive_stream(job.check_id)
-        async with asyncio.timeout(2.0):
+
+        async def _drain():
             async for _ in gen:
                 pass
+
+        await asyncio.wait_for(_drain(), timeout=2.0)
         # Job must still be there after the stream closed.
         assert job.check_id in server.JOBS, (
             "timing out a stream must NOT delete the underlying job — "
@@ -130,9 +141,12 @@ async def test_happy_path_stream_does_not_emit_timeout_event(monkeypatch):
     try:
         gen = _drive_stream(job.check_id)
         chunks = []
-        async with asyncio.timeout(2.0):
+
+        async def _consume():
             async for chunk in gen:
                 chunks.append(chunk)
+
+        await asyncio.wait_for(_consume(), timeout=2.0)
         joined = "".join(chunks)
         assert "event: timeout" not in joined, (
             f"happy-path stream must NOT emit 'timeout'; got {joined!r}"
