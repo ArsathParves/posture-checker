@@ -1152,10 +1152,12 @@ def _records(rep: Report, d: str):
                     "Multi-vantage probe (ECS-tagged A queries to an "
                     "ECS-honouring resolver) could not complete. Geo-"
                     "steering behaviour cannot be characterised on this "
-                    "run.")
+                    "run.",
+                    hardening=True)
         elif not mv.get("diverges"):
             rep.add(S, "Multi-vantage A view", "PASS",
-                    "US and India ECS vantages return the same A set")
+                    "US and India ECS vantages return the same A set",
+                    hardening=True)
         else:
             us = ", ".join(mv["us_records"]) or "(empty)"
             ind = ", ".join(mv["in_records"]) or "(empty)"
@@ -1291,7 +1293,8 @@ def _dnssec(rep: Report, d: str):
             rep.add(S, "Zone-walking exposure", "UNKNOWN",
                     "Could not probe denial-of-existence proofs "
                     f"({nsec.get('error', 'unknown error')}).",
-                    "Retry from an unrestricted vantage point.")
+                    "Retry from an unrestricted vantage point.",
+                    hardening=True)
         elif nsec["type"] == "NSEC":
             rep.add(S, "Zone-walking exposure", "WARN",
                     "Zone uses NSEC — every owner name in the zone can be "
@@ -1315,7 +1318,8 @@ def _dnssec(rep: Report, d: str):
             else:
                 rep.add(S, "Zone-walking exposure", "PASS",
                         f"NSEC3 in use, iterations = {iters} "
-                        "(RFC 9276 compliant).")
+                        "(RFC 9276 compliant).",
+                        hardening=True)
 
     # B25: CDS/CDNSKEY (RFC 7344 / 8078). Only meaningful on signed
     # zones — an unsigned zone has no DS to rotate, no rollover to
@@ -1328,7 +1332,8 @@ def _dnssec(rep: Report, d: str):
             rep.add(S, "Automated DS rollover", "UNKNOWN",
                     "Could not query CDS/CDNSKEY "
                     f"({cds.get('error', 'unknown error')}).",
-                    "Retry from an unrestricted vantage point.")
+                    "Retry from an unrestricted vantage point.",
+                    hardening=True)
         else:
             # RFC 7344 §4.1: parent may accept either record type;
             # publishing one is enough to enable automated rollover.
@@ -1336,7 +1341,8 @@ def _dnssec(rep: Report, d: str):
                 rep.add(S, "Automated DS rollover", "PASS",
                         "CDS/CDNSKEY published — parent registrars "
                         "supporting RFC 8078 can pick up DS updates "
-                        "without manual intervention.")
+                        "without manual intervention.",
+                        hardening=True)
             else:
                 rep.add(S, "Automated DS rollover", "WARN",
                         "No CDS or CDNSKEY records published at the "
@@ -1563,10 +1569,12 @@ def _email(rep: Report, d: str, dkim_selectors):
                             f"verification lookup unretrievable for "
                             f"{entry['domain']}",
                             "Could not query the ExtDestVerification record "
-                            "— NOT evidence the third party has declined.")
+                            "— NOT evidence the third party has declined.",
+                            hardening=True)
                 elif entry["verified"]:
                     rep.add(S, label, "PASS",
-                            f"{entry['domain']} opted in to receive reports")
+                            f"{entry['domain']} opted in to receive reports",
+                            hardening=True)
                 else:
                     rep.add(S, label, "FAIL",
                             f"{entry['domain']} has no ExtDestVerification "
@@ -1574,7 +1582,8 @@ def _email(rep: Report, d: str, dkim_selectors):
                             "RFC 7489 §7.1: without a `v=DMARC1` TXT at "
                             f"{d}._report._dmarc.{entry['domain']}, mail "
                             "receivers will not send aggregate reports to "
-                            "this address — reporting is silently broken.")
+                            "this address — reporting is silently broken.",
+                            hardening=True)
 
     if rep.data.get("null_mx"):
         rep.add(S, "Inbound mail checks", "INFO",
@@ -1889,7 +1898,8 @@ def _tls_posture(rep: Report, d: str):
     if not hsts.get("ok"):
         rep.add(S, "HSTS", "UNKNOWN",
                 f"HTTPS request failed: {hsts.get('error')}",
-                "HSTS state could not be read.")
+                "HSTS state could not be read.",
+                hardening=True)
     elif not hsts.get("present"):
         rep.add(S, "HSTS", "WARN",
                 "no Strict-Transport-Security header served",
@@ -1905,13 +1915,14 @@ def _tls_posture(rep: Report, d: str):
                 detail += "; includeSubDomains"
             if hsts.get("preload"):
                 detail += "; preload"
-            rep.add(S, "HSTS", "PASS", detail)
+            rep.add(S, "HSTS", "PASS", detail, hardening=True)
         else:
             rep.add(S, "HSTS", "WARN",
                     f"max-age={max_age} is below the six-month baseline",
                     "HSTS is present but its safety window is short. "
                     "Raise `max-age` to at least 15552000 (6 months); "
-                    "31536000 (1 year) is the common production value.")
+                    "31536000 (1 year) is the common production value.",
+                    hardening=True)
 
     # --- CAA / cert issuer alignment (RFC 8659 §3) ---------------------
     # A CA MUST NOT issue a cert unless a CAA `issue` (or `issuewild`)
